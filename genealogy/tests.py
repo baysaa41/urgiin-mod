@@ -1976,6 +1976,39 @@ class MediaSecurityTests(TreeBuilderMixin, TestCase):
         self.client.force_login(self.editor)
         self.assertEqual(self.client.get(self.url).status_code, 200)
 
+    def test_s3_redirects_to_presigned_url_after_permission_check(self):
+        """S3 үед файлыг дамжуулахгүй, эрх шалгасны дараа presigned URL руу шилжинэ."""
+        from unittest import mock
+
+        from django.test import override_settings
+
+        MediaLink.objects.create(media=self.media, content_object=self.child, is_primary=True)
+        self.client.force_login(self.viewer)
+        storage = self.media.file.storage
+        with override_settings(USE_S3_MEDIA=True), mock.patch.object(
+            storage, "url", return_value="https://bucket.s3.amazonaws.com/x?X-Amz-Signature=s"
+        ) as url:
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "https://bucket.s3.amazonaws.com/x?X-Amz-Signature=s")
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+        params = url.call_args.kwargs["parameters"]
+        self.assertIn("ResponseContentDisposition", params)
+
+    def test_s3_still_denies_hidden_person(self):
+        from unittest import mock
+
+        from django.test import override_settings
+
+        Person.objects.filter(pk=self.child.pk).update(visibility=Person.Visibility.PRIVATE)
+        MediaLink.objects.create(media=self.media, content_object=self.child, is_primary=True)
+        self.client.force_login(self.viewer)
+        with override_settings(USE_S3_MEDIA=True), mock.patch.object(
+            self.media.file.storage, "url"
+        ) as url:
+            self.assertEqual(self.client.get(self.url).status_code, 404)
+        url.assert_not_called()
+
 
 class AdminSmokeTests(TreeBuilderMixin, TestCase):
     """Admin-ийн БҮХ хуудсыг бодит өгөгдөлтэйгээр шалгана.

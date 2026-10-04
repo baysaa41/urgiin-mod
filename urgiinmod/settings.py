@@ -179,11 +179,39 @@ STORAGES = {
     },
 }
 
-# Медиа файл нь ЗӨВХӨН дотоодод — нээлттэй MEDIA_URL-ээр үйлчлэхгүй.
+# Медиа файл нь ЗӨВХӨН хувийн — нээлттэй MEDIA_URL-ээр үйлчлэхгүй.
 # Файлыг эрх шалгадаг view (genealogy.views.serve_media) дамжуулж өгнө,
 # эс бөгөөс амьд хүний зураг нууцлалыг тойрч нээлттэй болно.
 MEDIA_ROOT = BASE_DIR / "media"
 MEDIA_URL = "/media/"
+
+# S3: AWS_STORAGE_BUCKET_NAME тавигдсан үед медиа S3-д хадгалагдана. Бакет нь
+# ХУВИЙН (public access блоклосон, ACL-гүй) — бусад төслүүдийн public-read
+# хэв маягийг энд ХЭРЭГЛЭХГҮЙ. serve_media нь эрх шалгасны дараа богино
+# хугацаатай presigned URL руу redirect хийнэ. Тестийн үед үргэлж локал диск.
+AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME", "")
+AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
+USE_S3_MEDIA = bool(AWS_STORAGE_BUCKET_NAME) and not _running_tests()
+# Presigned URL-ийн хүчинтэй хугацаа (сек). Холбоосыг хуулж бусдад өгөхөд
+# удаан ажиллахгүй байх ёстой.
+MEDIA_URL_EXPIRE = int(os.environ.get("MEDIA_URL_EXPIRE", "300"))
+
+if USE_S3_MEDIA:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": AWS_STORAGE_BUCKET_NAME,
+            "region_name": AWS_REGION,
+            "location": "media",
+            "default_acl": None,
+            "querystring_auth": True,
+            "querystring_expire": MEDIA_URL_EXPIRE,
+            "file_overwrite": False,
+            "signature_version": "s3v4",
+            "addressing_style": "virtual",
+            "object_parameters": {"ServerSideEncryption": "AES256"},
+        },
+    }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -214,6 +242,15 @@ EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "25"))
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", default=False)
+
+# Amazon SES (anymail) — EMAIL_BACKEND=anymail.backends.amazon_ses.EmailBackend
+# үед. Түлхүүрийг boto3 нь AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env-ээс
+# өөрөө уншина (S3-тэй нэг IAM хэрэглэгч).
+ANYMAIL = {
+    "AMAZON_SES_CLIENT_PARAMS": {"region_name": AWS_REGION},
+}
+if os.environ.get("AWS_SES_CONFIGURATION_SET"):
+    ANYMAIL["AMAZON_SES_CONFIGURATION_SET_NAME"] = os.environ["AWS_SES_CONFIGURATION_SET"]
 
 LOGGING = {
     "version": 1,

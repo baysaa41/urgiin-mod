@@ -15,7 +15,8 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Case, Count, IntegerField, Q, Value, When
 from django.utils import timezone
-from django.http import Http404, HttpResponse, JsonResponse
+from django.utils.http import content_disposition_header
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -686,6 +687,27 @@ def serve_media(request, pk):
 
     if not media.file:
         raise Http404
+
+    # S3: файлыг Django-гоор дамжуулахгүй, эрх шалгасны дараа богино хугацаатай
+    # presigned URL руу шилжүүлнэ (бакет хувийн тул шууд холбоос ажиллахгүй).
+    if settings.USE_S3_MEDIA:
+        if request.GET.get("thumb") and media.thumbnail:
+            url = media.thumbnail.storage.url(
+                media.thumbnail.name, parameters={"ResponseContentType": "image/jpeg"}
+            )
+        else:
+            filename = media.file.name.rsplit("/", 1)[-1]
+            url = media.file.storage.url(
+                media.file.name,
+                parameters={
+                    "ResponseContentType": media.mime_type or "application/octet-stream",
+                    # Кирилл нэртэй файлд RFC 5987 (filename*=UTF-8'') хэлбэр хэрэгтэй.
+                    "ResponseContentDisposition": content_disposition_header(False, filename),
+                },
+            )
+        response = HttpResponseRedirect(url)
+        response["Cache-Control"] = "private, no-store"
+        return response
 
     # ?thumb=1 — жагсаалт/карт дээр хөнгөн хувилбарыг үзүүлнэ.
     if request.GET.get("thumb") and media.thumbnail:
