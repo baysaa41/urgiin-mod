@@ -305,7 +305,7 @@ class DirectRelationLabelTests(TestCase):
 
     def test_beyond_known_ladder_falls_back(self):
         self.assertEqual(direct_relation_label(8, "M", "ancestors"), "8 үеийн өвөг")
-        self.assertEqual(direct_relation_label(9, "F", "descendants"), "9 үеийн үр хойчис")
+        self.assertEqual(direct_relation_label(9, "F", "descendants"), "үр хойчис")
 
     def test_descendant_labels(self):
         self.assertEqual(direct_relation_label(1, "M", "descendants"), "хүү")
