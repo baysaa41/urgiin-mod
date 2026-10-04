@@ -1,0 +1,15 @@
+<div class="modal-header">
+    <h6 class="modal-title">{{ anchor.named_display }} — хамаатан нэмэх</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+<form hx-post="{% url 'genealogy:quick_add' anchor.pk relation %}"
+      hx-target="#htmx-modal-content">
+    {% csrf_token %}
+    <div class="modal-body">
+        {% include "partials/_form_fields.html" %}
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Болих</button>
+        <button type="submit" class="btn btn-primary">Нэмэх</button>
+    </div>
+</form>

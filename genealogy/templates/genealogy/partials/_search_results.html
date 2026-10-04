@@ -1,0 +1,26 @@
+{% if query %}
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            {% if results %}
+                <div class="small text-muted mb-1">{{ results|length }} илэрц:</div>
+                <ul class="list-unstyled mb-0">
+                    {% for person in results %}
+                        <li class="py-1">
+                            <a href="{% url 'genealogy:person_detail' person.pk %}"
+                               class="text-decoration-none {% if person.is_deceased and person.pk not in masked_pks %}text-secondary{% endif %}">
+                                <strong>{{ person.named_display }}</strong>
+                            </a>
+                            <span class="text-muted small">
+                                {% if person.pk in masked_pks %}(хувийн)
+                                {% else %}{{ person.lifespan }}
+                                    {% if person.clan_name %} · {{ person.clan_name }}{% endif %}{% endif %}
+                            </span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="small text-muted">«{{ query }}» гэсэн илэрц олдсонгүй.</div>
+            {% endif %}
+        </div>
+    </div>
+{% endif %}

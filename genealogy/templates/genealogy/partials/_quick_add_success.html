@@ -1,0 +1,14 @@
+<div class="modal-header">
+    <h6 class="modal-title">{% if linked %}Холбогдлоо{% else %}Нэмэгдлээ{% endif %}</h6>
+</div>
+<div class="modal-body">
+    <p class="mb-0">
+        <strong>{{ person.named_display }}</strong>
+        {% if linked %}
+            нь {{ anchor.named_display }}-тай холбогдлоо.
+        {% else %}
+            нь {{ anchor.named_display }}-тай холбогдож бүртгэгдлээ.
+        {% endif %}
+    </p>
+    <p class="text-muted small mb-0">Мод шинэчлэгдэж байна…</p>
+</div>

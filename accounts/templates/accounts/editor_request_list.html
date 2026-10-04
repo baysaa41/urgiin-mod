@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Editor хүсэлтүүд{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Editor хүсэлтүүд</h3>
+
+<table class="table table-sm align-middle">
+    <thead><tr><th>Хэрэглэгч</th><th>Тайлбар</th><th>Үүссэн</th><th></th></tr></thead>
+    <tbody>
+        {% for req in pending %}
+            <tr>
+                <td>{{ req.user.email }}</td>
+                <td class="text-muted small">{{ req.note|default:"—"|truncatechars:80 }}</td>
+                <td>{{ req.created_at|date:"Y-m-d" }}</td>
+                <td class="text-end">
+                    <form method="post" class="d-inline"
+                          action="{% url 'accounts:editor_request_decide' req.pk 'approve' %}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-success">Зөвшөөрөх</button>
+                    </form>
+                    <form method="post" class="d-inline"
+                          action="{% url 'accounts:editor_request_decide' req.pk 'reject' %}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-outline-secondary">Татгалзах</button>
+                    </form>
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="4" class="text-muted">Хүлээгдэж буй хүсэлт байхгүй.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if decided %}
+    <h6 class="text-muted mt-4">Шийдэгдсэн</h6>
+    <table class="table table-sm">
+        <thead><tr><th>Хэрэглэгч</th><th>Төлөв</th><th>Шийдсэн</th><th>Хэн</th></tr></thead>
+        <tbody>
+            {% for req in decided %}
+                <tr>
+                    <td>{{ req.user.email }}</td>
+                    <td>
+                        {% if req.status == "approved" %}
+                            <span class="badge bg-success">{{ req.get_status_display }}</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ req.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ req.resolved_at|date:"Y-m-d" }}</td>
+                    <td>{{ req.resolved_by.email|default:"—" }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endif %}
+{% endblock %}

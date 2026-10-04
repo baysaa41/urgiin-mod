@@ -1,0 +1,22 @@
+<div class="modal-header">
+    <h6 class="modal-title">Шинэ газар нэмэх</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+<form hx-post="{% url 'genealogy:place_create' %}"
+      hx-target="#{{ target }}"
+      hx-swap="innerHTML">
+    {% csrf_token %}
+    <input type="hidden" name="target" value="{{ target }}">
+    <div class="modal-body">
+        <div class="alert alert-light border py-2 small">
+            Шаталсан бүтэцтэй: эхлээд <strong>аймаг/хот</strong>-оо үүсгээд, дараа нь
+            <strong>сум</strong>-аа «Дээд нэгж»-ээр нь холбоно. Ингэснээр
+            «Архангай, Цэнхэр сум» гэж бүтнээрээ харагдана.
+        </div>
+        {% include "partials/_form_fields.html" %}
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Болих</button>
+        <button type="submit" class="btn btn-primary">Нэмэх</button>
+    </div>
+</form>

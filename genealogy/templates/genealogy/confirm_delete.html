@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Устгах уу?{% endblock %}
+
+{% block content %}
+<h3>Устгах уу?</h3>
+<div class="alert alert-warning col-lg-8">
+    <p><strong>{{ object.named_display }}</strong> болон түүнтэй холбоотой бүртгэлүүд устана.</p>
+    <p class="mb-0 small">
+        Зөвлөмж: хэрэв энэ нь давхардсан бичлэг бол устгахын оронд
+        <a href="{% url 'genealogy:duplicates' %}">нэгтгэх</a> нь дээр — түүх хадгалагдана.
+    </p>
+</div>
+<form method="post">
+    {% csrf_token %}
+    <button class="btn btn-danger">Тийм, устгах</button>
+    <a class="btn btn-outline-secondary" href="{% url 'genealogy:person_detail' object.pk %}">Болих</a>
+</form>
+{% endblock %}

@@ -1,0 +1,43 @@
+<div class="modal-header">
+    <h6 class="modal-title">{{ anchor.named_display }} — байгаа хүнийг холбох</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+<form hx-post="{% url 'genealogy:link_relative' anchor.pk relation %}"
+      hx-target="#htmx-modal-content">
+    {% csrf_token %}
+    <div class="modal-body">
+        {% if form.non_field_errors %}
+            <div class="alert alert-danger py-2">
+                {% for error in form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+            </div>
+        {% endif %}
+
+        <div class="mb-3">
+            <label class="form-label" for="{{ form.relation.id_for_label }}">{{ form.relation.label }}</label>
+            {{ form.relation }}
+        </div>
+
+        <label class="form-label">Хүн хайх</label>
+        <input type="search" name="q" class="form-control mb-2" autocomplete="off"
+               placeholder="Нэр, эцгийн нэр, овог…"
+               hx-get="{% url 'genealogy:person_picker' %}?anchor={{ anchor.pk }}&relation={{ relation }}&selected={{ selected|default:'' }}"
+               hx-target="#picker-results"
+               hx-trigger="keyup changed delay:300ms, load">
+        <div id="picker-results" class="border rounded p-2" style="max-height: 280px; overflow-y: auto;">
+            <div class="text-muted small">Хайж байна…</div>
+        </div>
+        {% if form.person.errors %}
+            <div class="text-danger small mt-2">
+                {% for error in form.person.errors %}{{ error }}{% endfor %}
+            </div>
+        {% endif %}
+        <div class="form-text">
+            Зөвхөн сонгосон хүн холбогдоно — шинэ хүн үүсэхгүй.
+            Шинэ хүн нэмэх бол «+ Хамаатан» товчийг ашиглана уу.
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Болих</button>
+        <button type="submit" class="btn btn-primary">Холбох</button>
+    </div>
+</form>

@@ -1,0 +1,37 @@
+[Unit]
+Description=gunicorn for urgiin-mod (Ургийн мод)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/django/urgiin-mod
+# Prod-д DEBUG заавал унтарна (settings.py-ийн guard-ыг давхар баталгаажуулна).
+Environment=DJANGO_DEBUG=0
+# Сокетыг /run дотор БАЙРЛУУЛАХАД энэ мөр ЗААВАЛ: /run нь root-ынх тул
+# энгийн хэрэглэгч тэнд файл үүсгэж чадахгүй (Permission denied). systemd нь
+# /run/urgiin-mod/-ыг deploy эзэмшилтэйгээр (0755) үүсгэж, зогсоход устгана.
+#
+# `--umask 0007` нь сокетыг 0660 болгоно — nginx (www-data) сокет руу
+# ХОЛБОГДОХЫН тулд бичих эрх хэрэгтэй, эс бөгөөс 502 Bad Gateway.
+# Тиймээс сервер дээр:  sudo usermod -aG deploy www-data && sudo systemctl restart nginx
+RuntimeDirectory=urgiin-mod
+RuntimeDirectoryMode=0755
+ExecStart=/home/deploy/django/urgiin-mod/.venv/bin/gunicorn \
+          --workers 3 \
+          --timeout 120 \
+          --umask 0007 \
+          --bind unix:/run/urgiin-mod/gunicorn.sock \
+          --access-logfile /home/deploy/django/urgiin-mod/logs/gunicorn-access.log \
+          --error-logfile /home/deploy/django/urgiin-mod/logs/gunicorn-error.log \
+          urgiinmod.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# Аюулгүй байдлын нэмэлт хаалт (sudo-гүй, зөвхөн өөрийн хавтас руу бичнэ)
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Ургийн мод — нүүр{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card text-center h-100"><div class="card-body">
+            <div class="display-6">{{ stats.total }}</div>
+            <div class="text-muted">Бүртгэгдсэн хүн</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center h-100"><div class="card-body">
+            <div class="display-6">{{ stats.living }}</div>
+            <div class="text-muted">Амьд</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center h-100"><div class="card-body">
+            <div class="display-6">{{ stats.families }}</div>
+            <div class="text-muted">Гэр бүл</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center h-100"><div class="card-body">
+            <div class="display-6">{{ stats.sources }}</div>
+            <div class="text-muted">Эх сурвалж</div>
+        </div></div>
+    </div>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">Сүүлд нэмэгдсэн</h4>
+    <div>
+        <a class="btn btn-outline-secondary btn-sm" href="{% url 'genealogy:tree' %}">Мод харах</a>
+        {% if user.can_edit %}
+            <a class="btn btn-primary btn-sm" href="{% url 'genealogy:person_create' %}">+ Хүн нэмэх</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row g-3">
+    {% for person in recent %}
+        <div class="col-12 col-md-6 col-lg-4">
+            {% include "genealogy/partials/_person_card.html" %}
+        </div>
+    {% empty %}
+        <div class="col-12">
+            <div class="alert alert-info">
+                Одоогоор хүн бүртгэгдээгүй байна.
+                {% if user.can_edit %}«Хүн нэмэх» товчоор эхлүүлээрэй.{% endif %}
+            </div>
+        </div>
+    {% endfor %}
+</div>
+{% endblock %}

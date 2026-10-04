@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h3 class="mb-3">{% block form_title %}Маягт{% endblock %}</h3>
+<form method="post" enctype="multipart/form-data" class="col-lg-8">
+    {% csrf_token %}
+    {% block form_extra %}{% endblock %}
+    {% include "partials/_form_fields.html" %}
+    <div class="mb-4">
+        <button type="submit" class="btn btn-primary">{% block submit_label %}Хадгалах{% endblock %}</button>
+        {% if cancel_url %}<a class="btn btn-outline-secondary" href="{{ cancel_url }}">Болих</a>{% endif %}
+    </div>
+</form>
+{# Формоос ГАДНА — энд өөрийн `<form>`-той хэсэг байрлуулж болно (nesting хориотой). #}
+{% block after_form %}{% endblock %}
+{% endblock %}

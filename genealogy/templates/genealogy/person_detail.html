@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}{{ person.named_display }} — Ургийн мод{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h3 class="mb-1 {% if person.is_deceased and not person_masked %}text-secondary{% endif %}">
+            {{ person.named_display }}
+            {% if person.is_closed %}<span class="badge bg-dark">хаалттай</span>
+            {% elif person.visibility == "private" %}<span class="badge bg-secondary">хувийн</span>{% endif %}
+        </h3>
+        {% comment %}
+            «Хувийн» хүн: нэр л харагдана — нас, хүйс, газар, овог бүгд
+            хаалттай (`person_masked`). «Хаалттай» хүн энд огт хүрэхгүй
+            (зөвхөн админ харна).
+        {% endcomment %}
+        {% if person_masked %}
+            <div class="text-muted small">Нарийн мэдээлэл (нас, хүйс, газар) хаалттай.</div>
+        {% else %}
+        <div class="text-muted">
+            {{ person.lifespan }}
+            {% if person.clan_name %} · Ургийн овог: {{ person.clan_name }}{% endif %}
+            {% if person.sex %}{{ person.get_sex_display }}{% endif %}
+        </div>
+        {% if person.birth_date or person.death_date or person.birth_place or person.death_place %}
+            <dl class="row small mb-0 mt-2">
+                <dt class="col-auto text-muted fw-normal">Төрсөн:</dt>
+                <dd class="col-auto mb-0">
+                    {{ person.birth_date.display|default:"—" }}
+                    {% if person.birth_place %}<span class="text-muted">· {{ person.birth_place.full_name }}</span>{% endif %}
+                </dd>
+                <dt class="col-auto text-muted fw-normal">Нас барсан:</dt>
+                <dd class="col-auto mb-0">
+                    {{ person.death_date.display|default:"—" }}
+                    {% if person.death_place %}<span class="text-muted">· {{ person.death_place.full_name }}</span>{% endif %}
+                </dd>
+            </dl>
+        {% endif %}
+        {% endif %}
+    </div>
+    <div class="no-print">
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'genealogy:tree_person' person.pk %}">Мод дээр</a>
+        {% comment %}
+            Мөр тус бүрийн эрх: засварлагч зөвхөн өөрийн/нээлттэй/эзэнгүй хүнийг засна.
+            Хамаатан НЭМЭХ нь `can_edit` шаардана (шинэ хүн үүсгэдэг) — холбогдсон
+            үзэгч зөвхөн «Засах»-ыг харна, эс бөгөөс 403 өгөх товч харагдана.
+            (АНХААР: `{# ... #}` нь зөвхөн НЭГ мөр — олон мөрөнд `{% comment %}`.)
+        {% endcomment %}
+        {% if user.can_edit and can_edit_person %}
+            <div class="btn-group">
+                <button class="btn btn-sm btn-primary dropdown-toggle" data-bs-toggle="dropdown">+ Хамаатан</button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><h6 class="dropdown-header">Шинэ хүн бүртгэх</h6></li>
+                    {% for rel, label in rel_choices %}
+                        <li>
+                            <button class="dropdown-item"
+                                    hx-get="{% url 'genealogy:quick_add' person.pk rel %}"
+                                    hx-target="#htmx-modal-content">{{ label }}</button>
+                        </li>
+                    {% endfor %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><h6 class="dropdown-header">Байгаа хүнийг холбох</h6></li>
+                    {% for rel, label in rel_choices %}
+                        <li>
+                            <button class="dropdown-item"
+                                    hx-get="{% url 'genealogy:link_relative' person.pk rel %}"
+                                    hx-target="#htmx-modal-content">{{ label }}</button>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        {% if can_edit_person %}
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'genealogy:person_edit' person.pk %}">Засах</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        {% if events and not person_masked %}
+            <h5>Амьдралын замнал</h5>
+            <div class="mb-4">
+                {% for part in events %}
+                    <div class="timeline-item">
+                        <div class="fw-semibold">{{ part.event.get_event_type_display }}</div>
+                        <div class="text-muted small">
+                            {{ part.event.date.display|default:"огноо тодорхойгүй" }}
+                            {% if part.event.place %} · {{ part.event.place.full_name }}{% endif %}
+                        </div>
+                        {% if part.event.description %}<div>{{ part.event.description }}</div>{% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <h5>Гэр бүл</h5>
+        <ul class="list-group mb-4">
+            {% for group in parent_groups %}
+                <li class="list-group-item {% if not group.is_birth %}border-start border-3{% endif %}">
+                    <span class="text-muted small">{{ group.label }}:</span>
+                    {% comment %}
+                        Эцэг эх бүрд тодруулга — «Дорж (эцэг), Санга (эх)».
+                        «Хувийн» хүнд тодруулга өгөхгүй (хүйс нь хаалттай).
+                    {% endcomment %}
+                    {% for p in group.people %}
+                        {% include "genealogy/partials/_person_link.html" %}{% if p.role_tag %} <span class="text-muted small">({{ p.role_tag }})</span>{% endif %}{% if not forloop.last %}, {% endif %}
+                    {% endfor %}
+                </li>
+            {% endfor %}
+            {% for group in sibling_groups %}
+                <li class="list-group-item {% if group.label != "Эцэг эх" %}border-start border-3{% endif %}">
+                    <span class="text-muted small">{{ group.sibling_label }}:</span>
+                    {% for p in group.people %}
+                        {% include "genealogy/partials/_person_link.html" %}{% if not forloop.last %}, {% endif %}
+                    {% endfor %}
+                </li>
+            {% endfor %}
+            {% for entry in own_families %}
+                <li class="list-group-item">
+                    <div>
+                        <span class="text-muted small">Гэр бүл:</span>
+                        {% if entry.partner %}
+                            {% include "genealogy/partials/_person_link.html" with p=entry.partner %}
+                        {% else %}<span class="text-muted">тодорхойгүй</span>{% endif %}
+                        {% if entry.family.marriage_date and not person_masked %}
+                            <span class="text-muted small">· {{ entry.family.marriage_date.display }}</span>
+                        {% endif %}
+                        {% if entry.can_edit %}
+                            <a class="small ms-2" href="{% url 'genealogy:family_edit' entry.family.pk %}">засах</a>
+                        {% endif %}
+                    </div>
+                    {% for group in entry.child_groups %}
+                        <div class="mt-1">
+                            <span class="text-muted small">{{ group.label }}:</span>
+                            {% for p in group.people %}
+                                {% include "genealogy/partials/_person_link.html" %}{% if not forloop.last %}, {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% endfor %}
+                </li>
+            {% empty %}
+                {% if not parent_groups and not sibling_groups %}
+                    <li class="list-group-item text-muted">Гэр бүлийн холбоо бүртгэгдээгүй.</li>
+                {% endif %}
+            {% endfor %}
+        </ul>
+
+        {% include "genealogy/partials/_missing_links.html" %}
+
+        {% if person.bio and not person_masked %}
+            <h5>Намтар</h5>
+            <div class="mb-4">{{ person.bio|linebreaks }}</div>
+        {% endif %}
+
+        {% if user.can_edit %}
+            <h5>Дотоод тэмдэглэл</h5>
+            <div class="mb-4 text-muted">{{ person.notes|linebreaks|default:"—" }}</div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-4">
+        {% comment %} Зураг ба эх сурвалж нь нарийн мэдээлэл — «Хувийн» хүнд хаалттай. {% endcomment %}
+        {% if not person_masked %}
+        <h5>Зураг ба баримт</h5>
+        {% if media %}
+            <div class="row g-2 mb-4">
+                {% for link in media %}
+                    <div class="col-6">
+                        <a href="{% url 'genealogy:media_serve' link.media.pk %}" target="_blank">
+                            {% if link.media.thumbnail %}
+                                <img src="{% url 'genealogy:media_serve' link.media.pk %}?thumb=1" class="img-fluid rounded" alt="">
+                            {% else %}
+                                <div class="border rounded p-3 text-center small">{{ link.media }}</div>
+                            {% endif %}
+                        </a>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="text-muted small">Зураг ороогүй.</p>
+        {% endif %}
+        {% if user.can_edit %}
+            <a class="btn btn-sm btn-outline-secondary mb-4"
+               href="{% url 'genealogy:media_upload' %}?person={{ person.pk }}">+ Файл нэмэх</a>
+        {% endif %}
+
+        <h5>Эх сурвалж</h5>
+        {% if citations %}
+            <ul class="list-unstyled small">
+                {% for c in citations %}
+                    <li class="mb-2">
+                        <div class="fw-semibold">{{ c.source.title }}</div>
+                        <div class="text-muted">
+                            {{ c.source.get_source_type_display }}
+                            {% if c.page %} · {{ c.page }}{% endif %}
+                            {% if c.source.repository %} · {{ c.source.repository }}{% endif %}
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted small">Эх сурвалж бүртгэгдээгүй.</p>
+        {% endif %}
+        {% endif %}{# not person_masked #}
+
+        {% if audit %}
+            <h5 class="mt-4">Сүүлийн өөрчлөлт</h5>
+            <ul class="list-unstyled small text-muted">
+                {% for log in audit %}
+                    <li>{{ log.created_at|date:"Y-m-d H:i" }} · {{ log.get_action_display }} · {{ log.user|default:"—" }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.detail.target.id === 'htmx-modal-content' && e.detail.xhr.getResponseHeader('HX-Trigger')) {
+      setTimeout(() => location.reload(), 600);
+    }
+  });
+</script>
+{% endblock %}

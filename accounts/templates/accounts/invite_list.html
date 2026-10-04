@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Урилгууд{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Урилгууд</h3>
+<p class="text-muted small">
+    Урилга нь модны хүний <strong>засах</strong> хуудаснаас илгээгдэнэ —
+    эндээс чөлөөтэй хаяг руу урих боломжгүй. Хүлээн авагч холбоосоор орж нууц
+    үгээ тавихад тухайн хүнтэй холбогдоно.
+</p>
+
+<table class="table table-sm">
+    <thead><tr><th>Имэйл</th><th>Хүн</th><th>Эрх</th><th>Үүссэн</th><th>Төлөв</th></tr></thead>
+    <tbody>
+        {% for invite in invites %}
+            <tr>
+                <td>{{ invite.email }}</td>
+                <td>
+                    {% if invite.person %}
+                        <a href="{% url 'genealogy:person_edit' invite.person.pk %}">
+                            {{ invite.person.display_name }}</a>
+                    {% else %}—{% endif %}
+                </td>
+                <td>{{ invite.get_role_display }}</td>
+                <td>{{ invite.created_at|date:"Y-m-d" }}</td>
+                <td>
+                    {% if invite.accepted_at %}
+                        <span class="badge bg-success">Хүлээн авсан</span>
+                    {% elif invite.is_valid %}
+                        <a href="{% url 'accounts:invite_accept' invite.token %}">холбоос</a>
+                    {% else %}
+                        <span class="badge bg-secondary">Хугацаа дууссан</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="5" class="text-muted">Урилга байхгүй.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

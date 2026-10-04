@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Давхардсан хүмүүс{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Давхардсан хүмүүс</h3>
+<p class="text-muted">
+    Ижил нэр, эцгийн нэртэй бүлгүүд. Нэгтгэх үед холбоо бүр шилжинэ —
+    бичлэг устахгүй, «нэгтгэсэн» гэж тэмдэглэгдэнэ (буцаах боломжтой).
+</p>
+
+{% for group in groups %}
+    <div class="card mb-3">
+        <div class="card-body">
+            <table class="table table-sm mb-2">
+                <thead><tr><th>Нэр</th><th>Он</th><th>Газар</th><th></th></tr></thead>
+                <tbody>
+                    {% for person in group %}
+                        <tr>
+                            <td><a href="{% url 'genealogy:person_detail' person.pk %}">{{ person.named_display }}</a></td>
+                            <td>{% if person.pk in masked_pks %}<span class="text-muted">(хувийн)</span>{% else %}{{ person.lifespan }}{% endif %}</td>
+                            <td>{% if person.pk in masked_pks %}—{% else %}{{ person.birth_place.full_name|default:"—" }}{% endif %}</td>
+                            <td class="text-end"><code>{{ person.pk }}</code></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <form method="post" action="{% url 'genealogy:merge' %}" class="row g-2 align-items-center">
+                {% csrf_token %}
+                <div class="col-auto small">Үлдээх:</div>
+                <div class="col-auto">
+                    <select name="keep" class="form-select form-select-sm">
+                        {% for person in group %}<option value="{{ person.pk }}">{{ person.named_display }} ({{ person.lifespan }})</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto small">Нэгтгэх:</div>
+                <div class="col-auto">
+                    <select name="duplicate" class="form-select form-select-sm">
+                        {% for person in group %}<option value="{{ person.pk }}">{{ person.named_display }} ({{ person.lifespan }})</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-sm btn-outline-danger">Нэгтгэх</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{% empty %}
+    <div class="alert alert-success">Давхардсан хүн илрээгүй. 🎉</div>
+{% endfor %}
+{% endblock %}

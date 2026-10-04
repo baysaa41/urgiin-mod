@@ -1,0 +1,54 @@
+{% if missing_links %}
+    <h5>Дутуу холбоос</h5>
+    <ul class="list-group mb-4">
+        {% for slot in missing_links %}
+            <li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                    <div>
+                        <span class="badge bg-warning text-dark">{{ slot.label }}</span>
+                        <span>бүртгэгдээгүй</span>
+                        {% if slot.ambiguous %}
+                            <div class="text-muted small">
+                                Одоогийн эцэг/эхийн хүйс тодорхойгүй тул аль нь дутуу нь
+                                мэдэгдэхгүй — зөвийг нь сонгоно уу.
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="d-flex gap-1">
+                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                hx-get="{% url 'genealogy:link_relative' person.pk slot.role %}"
+                                hx-target="#htmx-modal-content">Хайж холбох</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                hx-get="{% url 'genealogy:quick_add' person.pk slot.role %}"
+                                hx-target="#htmx-modal-content">Шинээр нэмэх</button>
+                    </div>
+                </div>
+
+                {% if slot.candidates %}
+                    <div class="mt-2">
+                        <span class="text-muted small">Санал болгож буй:</span>
+                        <div class="d-flex flex-wrap gap-2 mt-1">
+                            {% for item in slot.candidates %}
+                                {# Баталгаажуулах цонхыг тухайн хүнийг сонгосон байдлаар нээнэ. #}
+                                {# Ногоон хүрээ = ах дүүгийн бүртгэсэн эцэг/эх (хамгийн хүчтэй сэжүүр). #}
+                                <button type="button"
+                                        class="btn btn-sm text-start {% if item.reason %}btn-outline-success{% else %}btn-light border{% endif %}"
+                                        hx-get="{% url 'genealogy:link_relative' person.pk slot.role %}?person={{ item.person.pk }}"
+                                        hx-target="#htmx-modal-content"
+                                        title="{{ item.person.named_display }}-ийг {{ slot.label|lower }} болгож холбох">
+                                    <span class="fw-semibold {% if item.person.is_deceased %}text-secondary{% endif %}">{{ item.person.named_display }}</span>
+                                    {% if item.person.lifespan %}<span class="text-muted small">{{ item.person.lifespan }}</span>{% endif %}
+                                    {% if item.reason %}<span class="text-muted small">· {{ item.reason }}</span>{% endif %}
+                                </button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="text-muted small mt-1">
+                        Тохирох хүн санал болгохгүй байна — «Хайж холбох»-оор гараар хайна уу.
+                    </div>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+{% endif %}

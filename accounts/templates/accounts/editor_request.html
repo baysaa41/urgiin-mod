@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Засварлагч болох хүсэлт{% endblock %}
+
+{% block content %}
+<div class="col-lg-6">
+    <h3 class="mb-3">Засварлагч болох хүсэлт</h3>
+
+    {% if current and current.is_pending %}
+        <div class="alert alert-info">
+            <strong>Хүсэлт хүлээгдэж байна.</strong>
+            {{ current.created_at|date:"Y-m-d H:i" }}-д илгээсэн. Админ шийдвэрлэхэд мэдэгдэнэ.
+        </div>
+        {% if current.note %}<p class="text-muted">{{ current.note|linebreaks }}</p>{% endif %}
+
+    {% elif current and current.status == "rejected" %}
+        <div class="alert alert-secondary">
+            Таны хүсэлт <strong>татгалзагдсан</strong>
+            ({{ current.resolved_at|date:"Y-m-d" }}). Дахин хүсэлт гаргаж болно.
+        </div>
+        <form method="post">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label class="form-label" for="note">Тайлбар (заавал биш)</label>
+                <textarea name="note" id="note" rows="3" class="form-control"></textarea>
+            </div>
+            <button class="btn btn-primary">Хүсэлт илгээх</button>
+        </form>
+
+    {% else %}
+        <p class="text-muted">
+            Засварлагч нь мэдээлэл оруулах, засах эрхтэй. Хүсэлтээ илгээвэл админ
+            шийдвэрлэнэ.
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label class="form-label" for="note">Тайлбар (заавал биш)</label>
+                <textarea name="note" id="note" rows="3" class="form-control"
+                          placeholder="Жишээ нь: би энэ гэр бүлийн гишүүн, өвгийн мэдээлэл нэмэх болно."></textarea>
+            </div>
+            <button class="btn btn-primary">Хүсэлт илгээх</button>
+        </form>
+    {% endif %}
+</div>
+{% endblock %}

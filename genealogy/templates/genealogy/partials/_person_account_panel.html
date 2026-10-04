@@ -1,0 +1,97 @@
+{% comment %}
+    Хүн ↔ бүртгэл (хэрэглэгч) холбоос. Засах хуудасны ФОРМООС ГАДНА байрлана —
+    дотор нь хэд хэдэн бие даасан `<form>` байгаа тул үндсэн формыхоо дотор
+    байрлуулж болохгүй (nesting хориотой).
+
+    Шаардлагатай context (PersonUpdateView.get_context_data):
+      person · account_user · pending_invite · can_manage_account
+{% endcomment %}
+<div class="col-lg-8 mt-4">
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Бүртгэл (хэрэглэгч)</h5>
+
+            {% if person.is_deceased %}
+                <p class="text-muted mb-0">
+                    Нас барсан хүнд бүртгэл холбохгүй.
+                    {% if account_user %}Холбоос хэвээр байгаа бол доороос салгаж болно.{% endif %}
+                </p>
+            {% endif %}
+
+            {% if account_user %}
+                {# Холбогдсон #}
+                <p class="mb-2">
+                    <span class="badge bg-success">Холбогдсон</span>
+                    <strong>{{ account_user.email }}</strong>
+                    <span class="text-muted small">· {{ account_user.get_role_display }}</span>
+                </p>
+                {% if can_manage_account %}
+                    <form method="post" action="{% url 'genealogy:person_account_unlink' person.pk %}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-outline-danger">Салгах</button>
+                    </form>
+                {% endif %}
+
+            {% elif pending_invite %}
+                {# Урилга илгээсэн, хараахан хүлээн аваагүй #}
+                <p class="mb-2">
+                    <span class="badge bg-warning text-dark">Урилга илгээсэн</span>
+                    <strong>{{ pending_invite.email }}</strong>
+                    <span class="text-muted small">· {{ pending_invite.get_role_display }}
+                        · {{ pending_invite.expires_at|date:"Y-m-d" }} хүртэл</span>
+                </p>
+                <p class="text-muted small mb-0">
+                    Хүлээн авагч холбоосоор орж нууц үгээ тавихад энэ хүнтэй холбогдоно.
+                </p>
+
+            {% else %}
+                {# Холбоогүй #}
+                <p class="text-muted small">
+                    Энэ хүн системд нэвтэрч, өөрийн мэдээллээ засах бол бүртгэл холбоно уу.
+                    Холбогдсон хэрэглэгч <strong>зөвхөн энэ хүний</strong> мэдээллийг заана.
+                </p>
+
+                {% if can_manage_account and not person.is_deceased %}
+                    <form method="post" action="{% url 'genealogy:person_account_invite' person.pk %}"
+                          class="row g-2 align-items-start mb-3">
+                        {% csrf_token %}
+                        <div class="col-sm-5">
+                            <input type="email" name="email" class="form-control" required
+                                   placeholder="имэйл@example.com" aria-label="Имэйл">
+                        </div>
+                        <div class="col-sm-4">
+                            {# Админ эрх урилгаар олгогдохгүй — зөвхөн эдгээр хоёр. #}
+                            <select name="role" class="form-select" aria-label="Эрх">
+                                <option value="viewer">Энгийн хүн (зөвхөн харна)</option>
+                                <option value="editor">Editor (мэдээлэл оруулна)</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-auto">
+                            <button class="btn btn-primary">Урилга илгээх</button>
+                        </div>
+                    </form>
+
+                    {% if can_link_existing and linkable_users %}
+                        <form method="post" action="{% url 'genealogy:person_account_link' person.pk %}"
+                              class="row g-2 align-items-start">
+                            {% csrf_token %}
+                            <div class="col-sm-8">
+                                <select name="user" class="form-select" required aria-label="Хэрэглэгч">
+                                    <option value="">— байгаа хэрэглэгчийг сонгох —</option>
+                                    {% for u in linkable_users %}
+                                        <option value="{{ u.pk }}">{{ u.email }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-sm-auto">
+                                <button class="btn btn-outline-primary">Холбох</button>
+                            </div>
+                        </form>
+                    {% endif %}
+                {% elif not person.is_deceased %}
+                    <p class="text-muted small mb-0">Бүртгэл холбох эрх танд байхгүй.</p>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>

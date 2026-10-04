@@ -1,0 +1,21 @@
+{% for person in people %}
+    <label class="d-flex align-items-center gap-2 py-1 border-bottom" style="cursor:pointer">
+        <input type="radio" name="person" value="{{ person.pk }}" class="form-check-input mt-0"
+               {% if person.pk == selected %}checked{% endif %}>
+        <span>
+            <span class="fw-semibold {% if person.is_deceased %}text-secondary{% endif %}">{{ person.named_display }}</span>
+            <span class="text-muted small">
+                {{ person.lifespan }}
+                {% if person.clan_name %} · {{ person.clan_name }}{% endif %}
+            </span>
+        </span>
+    </label>
+{% empty %}
+    <div class="text-muted small">
+        {% if query %}
+            «{{ query }}» гэсэн хүн олдсонгүй.
+        {% else %}
+            Нэр бичээд хайна уу (хоосон үед эхний 25 хүн харагдана).
+        {% endif %}
+    </div>
+{% endfor %}

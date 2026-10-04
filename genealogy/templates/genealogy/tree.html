@@ -1,0 +1,321 @@
+{% extends "base.html" %}
+{% block title %}Мод — {{ root.named_display }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2 no-print">
+    <div>
+        <h4 class="mb-0">
+            <span id="tree-root-name">{{ root.named_display }}</span>
+            {# Гол хүнийг засах — зангилаа дарж төв солиход ч линк шинэчлэгдэнэ #}
+            {% if can_edit_root %}
+                <a class="btn btn-sm btn-outline-secondary ms-2 align-baseline"
+                   id="tree-root-edit"
+                   href="{% url 'genealogy:person_edit' root.pk %}">Засах</a>
+            {% else %}
+                <a class="btn btn-sm btn-outline-secondary ms-2 align-baseline d-none"
+                   id="tree-root-edit" href="#">Засах</a>
+            {% endif %}
+        </h4>
+        <div class="text-muted small" id="tree-root-life">{% if root_masked %}(хувийн){% else %}{{ root.lifespan }}{% endif %}</div>
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+        <div class="btn-group btn-group-sm" role="group">
+            <button class="btn btn-outline-primary {% if mode == 'both' %}active{% endif %}"
+                    data-mode="both">Нэгдсэн</button>
+            <button class="btn btn-outline-primary {% if mode == 'ancestors' %}active{% endif %}"
+                    data-mode="ancestors">Өвөг дээдэс</button>
+            <button class="btn btn-outline-primary {% if mode == 'descendants' %}active{% endif %}"
+                    data-mode="descendants">Үр хойчис</button>
+        </div>
+        <label class="small text-muted mb-0">Үе:
+            <input type="range" id="depth" min="1" max="9" value="{{ depth }}" class="form-range d-inline-block"
+                   style="width:100px;vertical-align:middle">
+            <span id="depth-val">{{ depth }}</span>
+        </label>
+        <label class="small text-muted mb-0" title="Өргөмөл, асран хүмүүжүүлсэн, хойд холбоог нуух">
+            <input type="checkbox" id="bloodline" {% if bloodline %}checked{% endif %}>
+            Зөвхөн цусан холбоо
+        </label>
+        {% comment %}
+            Админд: мод бусдад хэрхэн харагдахыг шалгах. Тохиргоо нь session-д
+            хадгалагдана (`is_admin_user` нь ЖИНХЭНЭ эрх — энгийн харагдацад
+            `user` нь бүрхүүл болдог тул).
+        {% endcomment %}
+        {% if is_admin_user %}
+            <form action="{% url 'accounts:set_view_mode' %}" method="post"
+                  class="d-flex align-items-center mb-0">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" name="normal" value="1"
+                           id="normal-view" {% if normal_view %}checked{% endif %}
+                           onchange="this.form.submit()">
+                    <label class="form-check-label small text-muted" for="normal-view"
+                           title="«Хаалттай» хүн ••• болж, «Хувийн» хүний нас/хүйс хаалттай харагдана">
+                        Энгийн view
+                    </label>
+                </div>
+            </form>
+        {% endif %}
+        <button class="btn btn-sm btn-outline-secondary" id="fit">Бүтэн харах</button>
+        <button class="btn btn-sm btn-outline-secondary" id="root"
+                title="Гол хүн рүү буцаж, уншигдахуйц хэмжээгээр томруулна">Гол хүн</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Хэвлэх</button>
+    </div>
+</div>
+
+<svg id="tree" class="tree-svg"></svg>
+<p class="text-muted small mt-2 no-print">
+    Зангилаа дарж тэр хүнийг модны төвд авчирна · <kbd>Ctrl</kbd>+дарж профайл нээнэ ·
+    хүрдээр томруулж, чирж зөөнө.
+    <span style="border-bottom:1px dashed #adb5bd">Тасархай</span>
+    шугам нь өргөмөл / асран хүмүүжүүлсэн / хойд холбоог заана — «Зөвхөн цусан
+    холбоо» гэсэн сонголтоор нууж болно.
+    {% if user.can_edit %}<span id="tree-hint">Зангилаа дээр хулганаа аваачиж «+» дарж хамаатан нэмнэ.</span>{% endif %}
+</p>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+let ROOT_ID = {{ root.pk }};
+let mode = "{{ mode }}";
+let depth = {{ depth }};
+let bloodline = {% if bloodline %}true{% else %}false{% endif %};
+
+const svg = d3.select("#tree");
+const g = svg.append("g");
+// Том мод (зуу гаруй зангилаа) дээр «бүтэн харах» нь зангилаа бүрийг
+// ~10px болгож жижигрүүлдэг тул хэрэглэгч ТОМРУУЛАХ боломжтой байх ёстой.
+// viewBox-оор багтаахын оронд d3.zoom-оор `g`-г хувиргана: ингэснээр
+// масштаб 1 нь зангилааны бодит хэмжээ (150px) болно.
+const zoom = d3.zoom().scaleExtent([0.02, 40]).on("zoom", (e) => g.attr("transform", e.transform));
+svg.call(zoom);
+
+const NODE_W = 150, NODE_H = 58;
+const PAD = 40;              // «бүтэн харах»-ын захын зай
+
+// `(cx, cy)` цэгийг viewport-ын төвд `scale` масштабаар авчирна.
+function transformFor(scale, cx, cy) {
+  const box = svg.node().getBoundingClientRect();
+  return d3.zoomIdentity
+      .translate(box.width / 2 - scale * cx, box.height / 2 - scale * cy)
+      .scale(scale);
+}
+
+function fitAll(animate = true) {
+  const b = window.__bbox;
+  if (!b) return;
+  const box = svg.node().getBoundingClientRect();
+  const scale = Math.min(box.width / (b.width + PAD * 2),
+                         box.height / (b.height + PAD * 2));
+  const sel = animate ? svg.transition().duration(300) : svg;
+  sel.call(zoom.transform, transformFor(scale, b.x + b.width / 2, b.y + b.height / 2));
+}
+
+// Гол хүн рүү үсрэх — мод хэт томорсон ч тэр хүнээ уншигдахуйц хэмжээгээр.
+function centerOnRoot(animate = true) {
+  const p = window.__rootPos;
+  if (!p) return fitAll(animate);
+  const sel = animate ? svg.transition().duration(300) : svg;
+  sel.call(zoom.transform, transformFor(1, p.x, p.y));
+}
+
+function draw(data) {
+  g.selectAll("*").remove();
+
+  const nodes = data.nodes.map(d => Object.assign({}, d));
+  const byId = new Map(nodes.map(d => [d.id, d]));
+
+  // DAG-ийг зурж болох мод болгох: давхардсан зангилааг НЭГ л удаа үлдээнэ.
+  const primaryLink = new Map();   // child -> эцэг эхийн жагсаалт
+  const dupLinks = [];
+  data.links.filter(l => l.type === "parent").forEach(l => {
+    if (l.duplicate) { dupLinks.push(l); return; }
+    if (!primaryLink.has(l.target)) primaryLink.set(l.target, []);
+    primaryLink.get(l.target).push(l.source);
+  });
+  const spouses = data.links.filter(l => l.type === "spouse");
+
+  // Үе тус бүрээр байрлуулах (depth аль хэдийн бодогдсон).
+  const byDepth = d3.group(nodes, d => d.row);
+  const depths = [...byDepth.keys()].sort((a, b) => a - b);
+  const positions = new Map();
+
+  // Энгийн "tidy" байрлуулалт: үе бүрт эцэг эхийн дарааллаар, дараа нь
+  // хамтрагчаараа хажуу тийшээ.
+  const maxPerRow = Math.max(...depths.map(d => byDepth.get(d).length));
+  const rowGap = NODE_W * 1.6;
+  const rowHeight = 130;
+  // `dep` нь МӨРИЙН дугаар (backend-ээс `row`): өвөг дээшээ сөрөг, үр хойш
+  // эерэг, root 0. «Өвөг дээдэс» горимд бүгд сөрөг (дээшээ), «Үр хойчис»-д
+  // эерэг (доошоо), «Нэгдсэн»-д хоёулаа — root төвд.
+  depths.forEach(dep => {
+    const row = byDepth.get(dep);
+    // Мөрийн эрэмбэ нь BACKEND дээр бодогдсон (`order`): root-оос гадагшлах
+    // дарааллаар, хүн бүр «root тал руу нэг алхам ойрхон» хүнийхээ мөр дэх
+    // байрлалаар. Иймд нэг айлын хүүхдүүд ЗЭРЭГЦЭЭ, ахмад ах/эгчийн
+    // хүүхдүүд урд, дотроо төрсөн оноор жагсана.
+    row.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    row.forEach((n, i) => {
+      positions.set(n.id, { x: i * rowGap - (row.length - 1) * rowGap / 2,
+                            y: dep * rowHeight });
+    });
+  });
+
+  const nodeLayer = g.append("g");
+
+  // Ирмэгүүд
+  const linkLayer = g.insert("g", ":first-child");
+  linkLayer.selectAll("path.link")
+    .data(data.links)
+    .join("path")
+      .attr("class", d => "tree-link "
+            + (d.type === "spouse" ? "spouse" : "")
+            + (d.pedigree && d.pedigree !== "birth" ? " adopted" : ""))
+      .attr("d", d => {
+        const s = positions.get(d.source), t = positions.get(d.target);
+        if (!s || !t) return null;
+        if (d.type === "spouse") return `M${s.x + NODE_W/2},${s.y} H${t.x - NODE_W/2}`;
+        const sy = s.y + NODE_H/2, ty = t.y - NODE_H/2;
+        return `M${s.x},${sy} C${s.x},${(sy+ty)/2} ${t.x},${(sy+ty)/2} ${t.x},${ty}`;
+      });
+
+  const node = nodeLayer.selectAll("g.tree-node")
+    .data(nodes)
+    .join("g")
+      .attr("class", d => `tree-node ${d.sex === "M" ? "male" : d.sex === "F" ? "female" : ""} `
+                        + `${d.root ? "root" : ""} ${d.hidden ? "hidden" : ""} `
+                        + `${d.deceased ? "deceased" : ""} ${d.masked ? "masked" : ""}`)
+      .attr("transform", d => {
+        const p = positions.get(d.id) || {x: 0, y: 0};
+        return `translate(${p.x - NODE_W/2},${p.y - NODE_H/2})`;
+      })
+      .on("click", (e, d) => {
+        if (d.hidden) return;
+        // Зангилаа дарж тэр хүнийг модны ТӨВД авчирна (хуудас дахин ачаалахгүй).
+        // Профайл руу явах бол Ctrl/Cmd+дарна.
+        if (e.metaKey || e.ctrlKey) {
+          window.location = `/person/${d.id}/`;
+          return;
+        }
+        recenter(d);
+      });
+
+  node.append("rect").attr("width", NODE_W).attr("height", NODE_H);
+  // Нэр: авгайлдаг нэр байвал хаалтанд хамт — «Батбаясгалан (Батаа)».
+  node.append("text").attr("x", 8).attr("y", 17).text(d => {
+    const n = d.called_name ? `${d.name} (${d.called_name})` : d.name;
+    return n.length > 20 ? n.slice(0, 19) + "…" : n;
+  });
+  node.append("text").attr("class", "years").attr("x", 8).attr("y", 31)
+      .text(d => d.hidden ? (d.closed ? "(хаалттай)" : "")
+                          : (d.masked ? "(хувийн)" : d.lifespan));
+  // Төвийн хүнтэй харьцах хамаатан ба «А/Э» замын код — хаалтанд.
+  // Жишээ: (өвөг эцэг · АЭ) — «А» нь аавын тал, «Э» нь ээжийн тал.
+  node.append("text").attr("class", "relation").attr("x", 8).attr("y", 46)
+      .text(d => {
+        const parts = [d.relation, d.path_code].filter(Boolean);
+        return parts.length ? `(${parts.join(" · ")})` : "";
+      });
+
+  // Түүлтип: нэр, он жил, хамаатан ба замын код (олон мөрөөр).
+  // Замын код: өвөг дээшээ «А/Э» (аав/ээж), үр хойш «Х/О» (хүү/охин).
+  node.append("title").text(d => {
+    if (d.hidden) return d.closed ? "Хаалттай хүн — мэдээлэл харуулахгүй" : "Нууцлагдсан хүн";
+    // «Хувийн» хүн: нэр л харагдана — нас, хүйс, хамаатан бүгд хаалттай.
+    if (d.masked) return `${d.name}\n(хувийн — мэдээлэл хаалттай)`;
+    const lines = [`${d.name} (${d.lifespan})`];
+    if (d.relation) lines.push(`Хамаатан: ${d.relation}`);
+    if (d.path_code) lines.push(`Зам: ${d.path_code}`);
+    return lines.join("\n");
+  });
+
+  {% if user.can_edit %}
+  // Хамаатан хурдан нэмэх "+" (SVG элемент дээр HTMX-ийг дахин боловсруулна)
+  node.filter(d => !d.hidden && d.can_edit).append("text")
+      .attr("class", "add-rel")
+      .attr("x", NODE_W - 10).attr("y", 31).attr("text-anchor", "end")
+      .attr("fill", "#0d6efd").style("font-size", "15px").style("font-weight", "bold")
+      .style("cursor", "pointer")
+      .text("+")
+      .attr("hx-get", d => `/person/${d.id}/quick-add/child/`)
+      .attr("hx-target", "#htmx-modal-content")
+      .on("click", (e) => e.stopPropagation());
+  htmx.process(nodeLayer.node());
+  {% endif %}
+
+  // Zoom тохируулах
+  const bbox = nodeLayer.node().getBBox();
+  window.__bbox = bbox;
+  window.__rootPos = positions.get(ROOT_ID) || {x: 0, y: 0};
+
+  // Анхны харагдац: мод бүтнээрээ уншигдахуйц багтаж байвал багтаана,
+  // эс бөгөөс ГОЛ ХҮН дээр масштаб 1-ээр төвлөрнө (том модны цорын
+  // уншигдахуйц харагдац). Дараа нь хэрэглэгч хүрдээр томруулж/жижигрүүлнэ.
+  const box = svg.node().getBoundingClientRect();
+  const fitScale = Math.min(box.width / (bbox.width + PAD * 2),
+                            box.height / (bbox.height + PAD * 2));
+  if (fitScale >= 1) {
+    fitAll(false);
+  } else {
+    centerOnRoot(false);
+  }
+}
+
+function dataUrl() {
+  return `/tree/${ROOT_ID}/data/?mode=${mode}&depth=${depth}&bloodline=${bloodline ? 1 : 0}`;
+}
+
+function pageUrl() {
+  return `/tree/${ROOT_ID}/?mode=${mode}&depth=${depth}${bloodline ? "&bloodline=1" : ""}`;
+}
+
+// Зангилаа дээр дарж тэр хүнийг модны төв болгоно. Хуудас дахин ачаалахгүй —
+// зөвхөн өгөгдөл дахин татагдаж, хаяг (URL) нь солигдоно (refresh хийхэд
+// хадогддог).
+function recenter(node) {
+  ROOT_ID = node.id;
+  document.getElementById("tree-root-name").textContent = node.name;
+  document.getElementById("tree-root-life").textContent =
+      node.masked ? "(хувийн)" : (node.lifespan || "");
+  // «Засах» линк шинэ гол хүн рүү заана. Эрхгүй бол нууна (мөр тус бүрийн дүрэм).
+  const edit = document.getElementById("tree-root-edit");
+  if (edit) {
+    edit.href = `/person/${node.id}/edit/`;
+    edit.classList.toggle("d-none", !node.can_edit);
+  }
+  history.replaceState(null, "", pageUrl());
+  load();
+}
+
+function load() {
+  d3.json(dataUrl()).then(draw);
+}
+
+document.querySelectorAll("[data-mode]").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("[data-mode]").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  mode = btn.dataset.mode;
+  load();
+}));
+document.getElementById("depth").addEventListener("input", (e) => {
+  document.getElementById("depth-val").textContent = e.target.value;
+});
+document.getElementById("depth").addEventListener("change", (e) => {
+  depth = +e.target.value;
+  load();
+});
+document.getElementById("bloodline").addEventListener("change", (e) => {
+  bloodline = e.target.checked;
+  load();
+});
+document.getElementById("fit").addEventListener("click", () => fitAll());
+document.getElementById("root").addEventListener("click", () => centerOnRoot());
+
+// Quick-add хийсний дараа модоо шинэчлэх
+document.body.addEventListener("tree:refresh", () => load());
+
+load();
+</script>
+{% endblock %}

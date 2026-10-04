@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Хайлт{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Хайлт</h3>
+<form method="get" class="col-lg-6 mb-4">
+    <div class="input-group">
+        <input type="search" name="q" value="{{ query }}" class="form-control"
+               placeholder="Нэр, эцгийн нэр, овог…" autofocus>
+        <button class="btn btn-primary">Хайх</button>
+    </div>
+</form>
+
+{% if query %}
+    <p class="text-muted">{{ results|length }} илэрц олдлоо.</p>
+    <div class="row g-3">
+        {% for person in results %}
+            <div class="col-12 col-md-6 col-lg-4">
+                {% include "genealogy/partials/_person_card.html" %}
+            </div>
+        {% empty %}
+            <div class="col-12"><div class="alert alert-info">Илэрц олдсонгүй.</div></div>
+        {% endfor %}
+    </div>
+{% endif %}
+{% endblock %}

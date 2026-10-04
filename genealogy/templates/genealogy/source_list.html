@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Эх сурвалж{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Эх сурвалж</h3>
+    {% if user.can_edit %}
+        <a class="btn btn-primary btn-sm" href="{% url 'genealogy:source_create' %}">+ Нэмэх</a>
+    {% endif %}
+</div>
+
+<table class="table table-sm align-middle">
+    <thead>
+        <tr><th>Гарчиг</th><th>Төрөл</th><th>Зохиогч</th><th>Хадгалагдаж буй газар</th></tr>
+    </thead>
+    <tbody>
+        {% for source in sources %}
+            <tr>
+                <td>
+                    {{ source.title }}
+                    {% if source.url %}<a href="{{ source.url }}" target="_blank" rel="noopener" class="small">холбоос</a>{% endif %}
+                </td>
+                <td>{{ source.get_source_type_display }}</td>
+                <td>{{ source.author }}</td>
+                <td>{{ source.repository }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="4" class="text-muted">Эх сурвалж бүртгэгдээгүй.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if is_paginated %}
+    <nav>
+        <ul class="pagination pagination-sm">
+            {% if page_obj.has_previous %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Өмнөх</a></li>
+            {% endif %}
+            <li class="page-item disabled"><span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span></li>
+            {% if page_obj.has_next %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Дараах</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+{% endif %}
+{% endblock %}

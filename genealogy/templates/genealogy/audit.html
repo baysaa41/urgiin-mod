@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Аудит бүртгэл{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Аудит бүртгэл</h3>
+<p class="text-muted small">Сүүлийн 200 өөрчлөлт. Энэ өгөгдөл нөхөгдөхгүй тул хэн юу хийснийг хянана.</p>
+
+<table class="table table-sm">
+    <thead><tr><th>Огноо</th><th>Хэрэглэгч</th><th>Үйлдэл</th><th>Объект</th><th>Дэлгэрэнгүй</th></tr></thead>
+    <tbody>
+        {% for log in logs %}
+            <tr>
+                <td class="text-nowrap">{{ log.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{{ log.user|default:"—" }}</td>
+                <td>{{ log.get_action_display }}</td>
+                <td>{{ log.object_repr }}</td>
+                <td class="small text-muted">{{ log.changes|default:"" }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="5" class="text-muted">Бүртгэл хоосон.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

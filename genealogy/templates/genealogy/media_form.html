@@ -1,0 +1,9 @@
+{% extends "genealogy/_form_base.html" %}
+{% block form_title %}Зураг / баримт оруулах{% endblock %}
+{% block form_extra %}
+    {% if request.GET.person %}
+        <input type="hidden" name="person" value="{{ request.GET.person }}">
+        <div class="alert alert-info py-2 small">Файл хадгалагдсаны дараа тухайн хүнтэй холбогдоно.</div>
+    {% endif %}
+{% endblock %}
+{% block submit_label %}Хадгалах{% endblock %}

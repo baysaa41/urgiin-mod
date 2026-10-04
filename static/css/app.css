@@ -1,0 +1,49 @@
+/* Ургийн мод — үндсэн стиль */
+
+.tree-svg {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid #dee2e6;
+  border-radius: .5rem;
+  background: #fbfbfb;
+}
+
+.tree-node rect {
+  fill: #fff;
+  stroke: #adb5bd;
+  stroke-width: 1.5px;
+  rx: 6;
+}
+.tree-node.male rect { stroke: #0d6efd; }
+.tree-node.female rect { stroke: #d63384; }
+.tree-node.root rect { stroke-width: 3px; fill: #fff8e1; }
+.tree-node.hidden rect { stroke-dasharray: 4 3; stroke: #ced4da; fill: #f8f9fa; }
+/* «Хувийн» хүн — нэр нь харагдана, нас/хүйс хаалттай. Хүйсийн өнгө ГҮЙ
+   (хүйс нь өөрөө хаалттай мэдээлэл), хүрээ нь тасархай. */
+.tree-node.masked rect { stroke-dasharray: 3 2; stroke: #b8a06a; fill: #fffdf3; }
+/* Нас барсан хүн — саарал (secondary) өнгөөр */
+.tree-node.deceased text { fill: #6c757d; }
+.tree-node.deceased rect { stroke: #ced4da; fill: #f8f9fa; }
+.tree-node.deceased.root rect { fill: #fff8e1; }
+/* Нас барсан ч ХҮЙС нь ялгагдана: хүрээ нь хүйсийн өнгө (бүдэгрүүлсэн),
+   дэвсгэр нь саарал хэвээр — «нас барсан» гэдэг нь дэвсгэрээр, хүйс нь
+   хүрээгээр илэрнэ. (Spec-ийн эрэмбээр дээрх `deceased rect`-ийг дарна.) */
+.tree-node.deceased.male rect { stroke: #8ab4e8; }
+.tree-node.deceased.female rect { stroke: #e0a0c4; }
+.tree-node text { font-size: 12px; font-family: system-ui, sans-serif; }
+.tree-node .years { fill: #6c757d; font-size: 10px; }
+/* Төвийн хүнтэй харьцах хамаатан — хаалтанд */
+.tree-node .relation { fill: #6c757d; font-size: 10px; }
+.tree-node { cursor: pointer; }
+.tree-link { fill: none; stroke: #adb5bd; stroke-width: 1.5px; }
+.tree-link.spouse { stroke: #d63384; stroke-dasharray: 4 2; }
+/* Өргөмөл / асран хүмүүжүүлсэн / хойд холбоо */
+.tree-link.adopted { stroke-dasharray: 5 4; stroke: #b1a7c9; opacity: .85; }
+
+.person-photo { max-width: 100%; border-radius: .5rem; }
+.timeline-item { border-left: 2px solid #dee2e6; padding-left: 1rem; margin-bottom: 1rem; }
+
+@media print {
+  nav, footer, .no-print { display: none !important; }
+  .tree-svg { height: auto; border: none; }
+}

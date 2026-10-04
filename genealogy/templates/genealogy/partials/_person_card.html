@@ -1,0 +1,30 @@
+{% comment %}
+`masked_pks` — нарийн мэдээлэл нь хаалттай («Хувийн») хүмүүс. Нэр нь
+харагдана, харин нас/газар/овог болон «нас барсан» саарал өнгө хаалттай.
+(АНХААР: `{# ... #}` нь зөвхөн НЭГ мөр — олон мөрөнд `{% comment %}`.)
+{% endcomment %}
+<div class="card h-100">
+    <div class="card-body">
+        <h6 class="card-title mb-1">
+            <a href="{% url 'genealogy:person_detail' person.pk %}"
+               class="text-decoration-none {% if person.is_deceased and person.pk not in masked_pks %}text-secondary{% endif %}">
+                {{ person.named_display }}
+            </a>
+        </h6>
+        {% if person.pk in masked_pks %}
+            <div class="text-muted small">(хувийн) — мэдээлэл хаалттай</div>
+        {% else %}
+            <div class="text-muted small">
+                {{ person.lifespan }}
+                {% if person.birth_place %} · {{ person.birth_place.full_name }}{% endif %}
+            </div>
+            {% if person.clan_name %}<div class="small text-muted">Ургийн овог: {{ person.clan_name }}</div>{% endif %}
+        {% endif %}
+    </div>
+    <div class="card-footer bg-transparent border-0 pt-0">
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'genealogy:tree_person' person.pk %}">Мод</a>
+        {% if user.can_edit and person.pk not in masked_pks %}
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'genealogy:person_edit' person.pk %}">Засах</a>
+        {% endif %}
+    </div>
+</div>

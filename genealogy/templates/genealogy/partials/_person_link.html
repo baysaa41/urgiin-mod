@@ -1,0 +1,19 @@
+{% comment %}
+Хүний холбоос — нас барсан бол secondary (саарал) өнгөөр.
+
+`p.is_hidden` (services.HiddenPerson) — «Хаалттай» хүн: нэр ч харагдахгүй,
+зөвхөн `•••`.
+`masked_pks` — нарийн мэдээлэл нь хаалттай («Хувийн») хүмүүс. «Нас барсан»
+гэдэг нь өөрөө мэдээлэл тул тэдэнд саарал өнгийг хэрэглэхгүй — эс бөгөөс
+өнгөөр дамжин алдарна.
+(АНХААР: `{# ... #}` нь зөвхөн НЭГ мөр — олон мөрөнд `{% comment %}`.)
+{% endcomment %}
+{% if p.is_hidden %}
+    <span class="text-muted" title="{% if p.closed %}Хаалттай хүн — мэдээлэл харуулахгүй{% else %}Харах эрхгүй{% endif %}">•••{% if p.closed %} (хаалттай){% endif %}</span>
+{% elif p.pk in masked_pks %}
+    <a href="{% url 'genealogy:person_detail' p.pk %}" class="text-decoration-none">{{ p.named_display }}</a>
+    <span class="text-muted small" title="Нас, хүйс, газар хаалттай">(хувийн)</span>
+{% else %}
+    <a href="{% url 'genealogy:person_detail' p.pk %}"
+       class="text-decoration-none {% if p.is_deceased %}text-secondary{% endif %}">{{ p.named_display }}</a>
+{% endif %}

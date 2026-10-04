@@ -1,0 +1,38 @@
+{% if form.non_field_errors %}
+    <div class="alert alert-danger">
+        {% for error in form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+    </div>
+{% endif %}
+{% for field in form %}
+    {% if field.is_hidden %}
+        {{ field }}
+    {% elif field.name|slice:"-7:" == "_approx" %}
+        {% comment %}
+            Огнооны талбарын АРАД — «ойролцоогоор» чек. `mt-n2` нь дээрх
+            талбарын доод зайг шахаж, харагдах байдлаар холбоно.
+            (АНХААР: `{# ... #}` нь зөвхөн НЭГ мөр — олон мөрөнд `{% comment %}`.)
+        {% endcomment %}
+        <div class="form-check mt-n2 mb-3">
+            {{ field }}
+            <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+    {% else %}
+        <div class="mb-3">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {% if field.name in place_field_names %}
+                {# Газрын талбар: сонгох эсвэл шууд шинээр нэмэх #}
+                <div class="input-group">
+                    {{ field }}
+                    <button class="btn btn-outline-secondary" type="button" title="Шинэ газар нэмэх"
+                            hx-get="{% url 'genealogy:place_create' %}?target={{ field.id_for_label }}"
+                            hx-target="#htmx-modal-content">+ Газар</button>
+                </div>
+            {% else %}
+                {{ field }}
+            {% endif %}
+            {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+            {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+    {% endif %}
+{% endfor %}
