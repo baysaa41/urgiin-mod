@@ -306,9 +306,25 @@ def person_detail(request, pk):
 
 
 class PersonCreateView(CanEditMixin, CreateView):
+    """Модноос ХОЛБООГҮЙ шинэ хүн — зөвхөн админ.
+
+    Засварлагч хүнийг зөвхөн хамаатан нэмэх (quick-add) замаар, модонд
+    холбогдсон байдлаар нэмнэ — эс бөгөөс өнчин бичлэг хуримтлагдана.
+    """
+
     model = Person
     form_class = PersonForm
     template_name = "genealogy/person_form.html"
+
+    def test_func(self):
+        return bool(getattr(self.request.user, "is_admin", False))
+
+    def handle_no_permission(self):
+        if self.request.user.is_authenticated:
+            messages.error(self.request, "Шинэ хүнийг зөвхөн админ нэмнэ — "
+                                         "хамаатныг модноос «+»-ээр нэмнэ үү.")
+            return redirect("genealogy:home")
+        return super().handle_no_permission()
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user

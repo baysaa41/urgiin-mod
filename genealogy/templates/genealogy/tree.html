@@ -37,11 +37,11 @@
             Зөвхөн цусан холбоо
         </label>
         {% comment %}
-            Админд: мод бусдад хэрхэн харагдахыг шалгах. Тохиргоо нь session-д
-            хадгалагдана (`is_admin_user` нь ЖИНХЭНЭ эрх — энгийн харагдацад
-            `user` нь бүрхүүл болдог тул).
+            Админ/засварлагчид: мод бусдад хэрхэн харагдахыг шалгах. Тохиргоо нь
+            session-д хадгалагдана (`can_switch_view` нь ЖИНХЭНЭ эрх — энгийн
+            харагдацад `user` нь бүрхүүл болдог тул).
         {% endcomment %}
-        {% if is_admin_user %}
+        {% if can_switch_view %}
             <form action="{% url 'accounts:set_view_mode' %}" method="post"
                   class="d-flex align-items-center mb-0">
                 {% csrf_token %}

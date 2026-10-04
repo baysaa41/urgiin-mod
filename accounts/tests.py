@@ -381,9 +381,29 @@ class AdminViewModeTests(TestCase):
         self.assertEqual(self._set("admin").status_code, 302)
         self.assertFalse(self._node(self.grandpa.pk)["hidden"])
 
-    def test_editor_cannot_use_the_toggle(self):
+    def test_editor_can_use_the_toggle(self):
+        """Засварлагч ч «Энгийн view»-оор засах эрхгүй гишүүн мэт харна."""
         self.client.force_login(self.editor)
+        self.assertEqual(self._set("normal").status_code, 302)
+        r = self.client.get(reverse("genealogy:person_edit", args=[self.child.pk]))
+        self.assertEqual(r.status_code, 302)      # засах эрх хаагдсан
+        self.assertEqual(self._set("admin").status_code, 302)   # буцааж асаана
+        r = self.client.get(reverse("genealogy:person_edit", args=[self.child.pk]))
+        self.assertEqual(r.status_code, 200)
+
+    def test_tree_page_has_the_toggle_for_editor(self):
+        self.client.force_login(self.editor)
+        self.assertContains(self.client.get(reverse("genealogy:tree_person",
+                                                    args=[self.child.pk])),
+                            'id="normal-view"')
+
+    def test_viewer_cannot_use_the_toggle(self):
+        viewer = User.objects.create_user(email="vm-viewer@example.com", password="x")
+        self.client.force_login(viewer)
         self.assertEqual(self._set("normal").status_code, 404)
+        self.assertNotContains(self.client.get(reverse("genealogy:tree_person",
+                                                       args=[self.child.pk])),
+                               'id="normal-view"')
 
     def test_unknown_mode_is_rejected(self):
         self.client.force_login(self.admin)
@@ -424,8 +444,3 @@ class AdminViewModeTests(TestCase):
         self.client.post(self.mode_url, {"next": "/"})       # чекбокс тэмдэглээгүй
         self.assertFalse(self._node(self.father.pk)["masked"])
 
-    def test_editor_has_no_view_toggle_on_tree(self):
-        self.client.force_login(self.editor)
-        html = self.client.get(
-            reverse("genealogy:tree_person", args=[self.child.pk])).content.decode()
-        self.assertNotIn('id="normal-view"', html)

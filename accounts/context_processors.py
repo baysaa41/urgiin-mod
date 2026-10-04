@@ -12,5 +12,7 @@ def view_mode(request):
     """
     return {
         "is_admin_user": bool(getattr(real_user(request), "is_admin", False)),
+        # «Энгийн view» чекбокс — админ ба засварлагчид (жинхэнэ эрхээр).
+        "can_switch_view": bool(getattr(real_user(request), "can_edit", False)),
         "normal_view": is_normal_view(request),
     }

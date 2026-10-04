@@ -26,7 +26,9 @@
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">Удирдах</a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{% url 'genealogy:person_create' %}">Хүн нэмэх</a></li>
+                            {% if user.is_admin %}
+                                <li><a class="dropdown-item" href="{% url 'genealogy:person_create' %}">Хүн нэмэх</a></li>
+                            {% endif %}
                             <li><a class="dropdown-item" href="{% url 'genealogy:event_create' %}">Үйл явдал нэмэх</a></li>
                             <li><a class="dropdown-item" href="{% url 'genealogy:media_upload' %}">Файл оруулах</a></li>
                             <li><hr class="dropdown-divider"></li>

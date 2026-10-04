@@ -422,8 +422,12 @@ class PersonQuerySet(models.QuerySet):
         text = (text or "").strip()
         if not text:
             return self.none()
+        # Сан нь `C` locale-тай тул PostgreSQL-ийн ILIKE кирилл үсгийн том/жижгийг
+        # ялгана («Ү» ≠ «ү»). `search_text` нь Python-оор жижиг үсэг болгосон тул
+        # асуулгыг ч Python-оор жижигрүүлж харьцуулна.
         return self.alive().filter(
-            Q(search_text__icontains=text)
+            Q(search_text__contains=text.lower())
+            | Q(search_text__icontains=text)
             | Q(given_name__icontains=text)
             | Q(patronymic__icontains=text)
             | Q(clan_name__icontains=text)
@@ -661,7 +665,9 @@ class Person(models.Model):
         """Нас, хүйс, газар, намтар зэрэг нарийн мэдээлэл харах эрх.
 
         «Хувийн» хүний нэр харагдана (`can_view`), харин нарийн мэдээлэл нь
-        зөвхөн админ/засварлагч болон тухайн хүүр өөрт нь харагдана.
+        зөвхөн админ, ТУХАЙН хүнийг засах эрхтэй засварлагч (`can_edit_by` —
+        өөрийн нэмсэн/нээлттэй/өөрийн удам) болон хүн өөрт нь харагдана.
+        Засварлагч нэмэгдэх бүрт хувийн мэдээлэл бүгдэд нь нээгдэхгүй.
         """
         if not self.can_view(user):
             return False
@@ -669,7 +675,7 @@ class Person(models.Model):
             if (self.linked_user_id is not None
                     and self.linked_user_id == getattr(user, "pk", None)):
                 return bool(getattr(user, "is_active", False))
-            if getattr(user, "can_edit", False):
+            if self.can_edit_by(user):
                 return True
         return self.effective_visibility in (
             self.Visibility.PUBLIC, self.Visibility.FAMILY)

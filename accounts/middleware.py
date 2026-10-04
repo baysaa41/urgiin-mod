@@ -1,6 +1,7 @@
-"""Админы «энгийн харагдац».
+"""Админ/засварлагчийн «энгийн харагдац».
 
-Админ нь сайт бусдад хэрхэн харагдахыг шалгах боломжтой байх ёстой:
+Засах эрхтэй хэрэглэгч (админ, засварлагч) сайт бусдад хэрхэн харагдахыг
+шалгах боломжтой байх ёстой:
 «Хаалттай» хүн `•••` болж, «Хувийн» хүний нас/хүйс хаалттай, засах товч
 алга болно. Сонголт нь session-д хадгалагдана (бүх хуудсанд үйлчилнэ).
 
@@ -45,7 +46,7 @@ def is_normal_view(request):
 
 
 class AdminViewModeMiddleware:
-    """Админ «энгийн харагдац»-ыг сонгосон бол эрхийг нь хаана.
+    """Админ/засварлагч «энгийн харагдац»-ыг сонгосон бол эрхийг нь хаана.
 
     `AuthenticationMiddleware`-ийн ДАРАА, `LoginRequiredMiddleware`-ийн
     ӨМНӨ байх ёстой — доод бүх middleware аль хэдийн хаалттай хэрэглэгчийг
@@ -58,11 +59,11 @@ class AdminViewModeMiddleware:
     def __call__(self, request):
         user = getattr(request, "user", None)
         # Жинхэнэ хэрэглэгчийг тусдаа хадгална: унтраалга нь эрхээ буцааж
-        # асаахын тулд «би админ мөн үү» гэдгийг мэдэх ёстой.
+        # асаахын тулд «би засах эрхтэй юу» гэдгийг мэдэх ёстой.
         request.real_user = user
         if (user is not None
                 and getattr(user, "is_authenticated", False)
-                and getattr(user, "is_admin", False)
+                and getattr(user, "can_edit", False)
                 and request.session.get(VIEW_MODE_SESSION_KEY) == MODE_NORMAL):
             request.user = NormalViewUser(user)
         return self.get_response(request)

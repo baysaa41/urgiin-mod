@@ -1704,6 +1704,21 @@ class PersonEditPermissionTests(TreeBuilderMixin, TestCase):
         r = self.client.get(reverse("genealogy:person_edit", args=[self.grandpa.pk]))
         self.assertEqual(r.status_code, 200)
 
+    def test_private_details_only_for_editors_who_can_edit(self):
+        """«Хувийн» хүний нарийн мэдээллийг зөвхөн засах эрхтэй засварлагч харна."""
+        self._make_fixture_foreign()
+        Person.objects.filter(pk=self.grandpa.pk).update(visibility=Person.Visibility.PRIVATE)
+        self.grandpa.refresh_from_db()
+        # Удамд нь биш засварлагч — нэр харна, нарийн мэдээлэл хаалттай.
+        self.assertTrue(self.grandpa.can_view(self.editor))
+        self.assertFalse(self.grandpa.can_see_details(self.editor))
+        # Удамд нь орсон (ач нь) — засах эрхтэй тул харна.
+        Person.objects.filter(pk=self.grandchild.pk).update(linked_user=self.editor)
+        self.editor._lineage_ids_cache = None
+        self.assertTrue(self.grandpa.can_see_details(self.editor))
+        # Админ ямагт харна.
+        self.assertTrue(self.grandpa.can_see_details(self.admin))
+
     def test_editable_by_matches_can_edit_by(self):
         """Хоёр зам (queryset ба объект) ижил байх ёстой — зөрвөл энэ тест унана."""
         Person.objects.filter(pk=self.father.pk).update(linked_user=self.editor)
@@ -2194,7 +2209,9 @@ class PlaceTests(TestCase):
         self.assertContains(response, f'value="{summ.pk}"')
 
     def test_person_form_shows_add_place_button(self):
-        self.client.force_login(self.editor)
+        admin = User.objects.create_user(email="place-admin@example.com", password="x",
+                                         role=User.Role.ADMIN)
+        self.client.force_login(admin)
         response = self.client.get(reverse("genealogy:person_create"))
         self.assertContains(response, "+ Газар")
         self.assertContains(response, f'hx-target="#htmx-modal-content"')
@@ -3131,3 +3148,52 @@ class UserMenuTests(TreeBuilderMixin, TestCase):
         html = self.client.get(reverse("genealogy:home")).content.decode()
         self.assertIn(reverse("genealogy:person_detail", args=[self.child.pk]), html)
         self.assertIn(reverse("genealogy:tree_person", args=[self.child.pk]), html)
+
+
+class AdminOnlyPersonCreateTests(TreeBuilderMixin, TestCase):
+    """Холбоогүй шинэ хүн нэмэх нь зөвхөн админд; засварлагч quick-add-аар."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="pc-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="pc-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.url = reverse("genealogy:person_create")
+
+    def test_editor_is_redirected(self):
+        self.client.force_login(self.editor)
+        r = self.client.post(self.url, {"given_name": "Сул", "sex": "M"})
+        self.assertEqual(r.status_code, 302)
+        self.assertFalse(Person.objects.filter(given_name="Сул").exists())
+
+    def test_admin_can_open(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+
+    def test_button_only_for_admin(self):
+        self.client.force_login(self.editor)
+        self.assertNotContains(self.client.get(reverse("genealogy:home")), self.url)
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(reverse("genealogy:home")), self.url)
+
+    def test_editor_can_still_quick_add_relative(self):
+        self.client.force_login(self.editor)
+        r = self.client.get(reverse("genealogy:quick_add", args=[self.child.pk, "child"]))
+        self.assertEqual(r.status_code, 200)
+
+
+class CalledNameSearchTests(TestCase):
+    """Авгайлдаг нэрээр ч хайлтад олдоно."""
+
+    def test_search_matches_called_name(self):
+        p = Person.objects.create(given_name="Батбаясгалан", called_name="Батаа")
+        self.assertIn(p, Person.objects.search("батаа"))
+        self.assertIn(p, Person.objects.search("Батбаяс"))
+
+    def test_search_ignores_cyrillic_case(self):
+        """C locale-тай санд ILIKE кирилл том/жижгийг ялгадаг — үүнийг тойрно."""
+        p = Person.objects.create(given_name="Ойдов", called_name="Үндээ")
+        for q in ("Үндээ", "үндээ", "ҮНДЭЭ", "ойдов", "ОЙДОВ"):
+            with self.subTest(q=q):
+                self.assertIn(p, Person.objects.search(q))

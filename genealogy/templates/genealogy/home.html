@@ -33,7 +33,7 @@
     <h4 class="mb-0">Сүүлд нэмэгдсэн</h4>
     <div>
         <a class="btn btn-outline-secondary btn-sm" href="{% url 'genealogy:tree' %}">Мод харах</a>
-        {% if user.can_edit %}
+        {% if user.is_admin %}
             <a class="btn btn-primary btn-sm" href="{% url 'genealogy:person_create' %}">+ Хүн нэмэх</a>
         {% endif %}
     </div>

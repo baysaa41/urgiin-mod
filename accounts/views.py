@@ -204,20 +204,20 @@ def _safe_next(request):
 @require_POST
 @login_required
 def set_view_mode(request):
-    """Админы харагдацыг солино: «Админ» ↔ «Энгийн».
+    """Админ/засварлагчийн харагдацыг солино: «Бүтэн» ↔ «Энгийн».
 
     `request.user` нь «энгийн харагдац»-д бүрхүүл болдог тул жинхэнэ
     хэрэглэгчээр (`real_user`) шалгана — эс бөгөөс админ буцаж асаахгүй.
     """
     user = real_user(request)
-    if not getattr(user, "is_admin", False):
+    if not getattr(user, "can_edit", False):
         raise Http404
     if "mode" in request.POST:
         mode = request.POST.get("mode")
         if mode not in VIEW_MODES:
             raise Http404
     else:
-        # Модны хуудасны «Энгийн view» чекбокс — тэмдэглээгүй бол админ харагдац.
+        # Модны хуудасны «Энгийн view» чекбокс — тэмдэглээгүй бол бүтэн харагдац.
         mode = MODE_NORMAL if request.POST.get("normal") else MODE_ADMIN
     request.session[VIEW_MODE_SESSION_KEY] = mode
     if mode == MODE_NORMAL:
