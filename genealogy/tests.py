@@ -1662,8 +1662,51 @@ class PersonEditPermissionTests(TreeBuilderMixin, TestCase):
             for p in (self.null_owner, self.foreign, self.opened, self.own):
                 self.assertFalse(p.can_edit_by(user), f"{user} / {p.display_name}")
 
+    def _make_fixture_foreign(self):
+        """Fixture-ийн бүх хүнийг бусдын болгоно (created_by = other)."""
+        Person.objects.filter(pk__in=[self.grandpa.pk, self.grandma.pk, self.father.pk,
+                                      self.mother.pk, self.child.pk, self.grandchild.pk]
+                              ).update(created_by=self.other)
+
+    def test_editor_can_edit_own_ancestors_and_descendants(self):
+        self._make_fixture_foreign()
+        Person.objects.filter(pk=self.father.pk).update(linked_user=self.editor)
+        lineage = (self.grandpa, self.grandma, self.child, self.grandchild)
+        for p in lineage:
+            p.refresh_from_db()
+            self.assertTrue(p.can_edit_by(self.editor), p.display_name)
+        ids = set(Person.objects.editable_by(self.editor).values_list("pk", flat=True))
+        self.assertTrue({p.pk for p in lineage} <= ids)
+
+    def test_lineage_excludes_spouse_and_closed(self):
+        """Эхнэр/нөхөр удамд орохгүй; «Хаалттай» өвгийг засварлагч засахгүй."""
+        self._make_fixture_foreign()
+        Person.objects.filter(pk=self.father.pk).update(linked_user=self.editor)
+        Person.objects.filter(pk=self.grandpa.pk).update(visibility=Person.Visibility.CLOSED)
+        self.mother.refresh_from_db()
+        self.grandpa.refresh_from_db()
+        self.assertFalse(self.mother.can_edit_by(self.editor))
+        self.assertFalse(self.grandpa.can_edit_by(self.editor))
+        ids = set(Person.objects.editable_by(self.editor).values_list("pk", flat=True))
+        self.assertNotIn(self.mother.pk, ids)
+        self.assertNotIn(self.grandpa.pk, ids)
+
+    def test_viewer_does_not_get_lineage_rights(self):
+        self._make_fixture_foreign()
+        Person.objects.filter(pk=self.father.pk).update(linked_user=self.viewer)
+        self.grandpa.refresh_from_db()
+        self.assertFalse(self.grandpa.can_edit_by(self.viewer))
+
+    def test_editor_200_on_ancestor_edit(self):
+        self._make_fixture_foreign()
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.editor)
+        self.client.force_login(self.editor)
+        r = self.client.get(reverse("genealogy:person_edit", args=[self.grandpa.pk]))
+        self.assertEqual(r.status_code, 200)
+
     def test_editable_by_matches_can_edit_by(self):
         """Хоёр зам (queryset ба объект) ижил байх ёстой — зөрвөл энэ тест унана."""
+        Person.objects.filter(pk=self.father.pk).update(linked_user=self.editor)
         for user in (self.admin, self.editor, self.other, self.viewer):
             ids = set(Person.objects.editable_by(user).values_list("pk", flat=True))
             expected = {p.pk for p in Person.objects.alive() if p.can_edit_by(user)}

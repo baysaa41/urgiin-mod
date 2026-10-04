@@ -325,6 +325,26 @@ class Place(models.Model):
 # ---------------------------------------------------------------------------
 
 
+def _lineage_ids(user):
+    """Хэрэглэгчтэй холбогдсон хүний өвөг дээдэс + үр хойчсын id (frozenset).
+
+    Засварлагч өөрийн удмыг засах эрхтэй. CTE нь хүсэлт бүрд нэг л удаа
+    ажиллахын тулд үр дүнг `user` объект дээр кэшилнэ (`request.user` нь
+    хүсэлт бүрд шинэ объект тул хуучирсан кэш хүсэлт дамжихгүй).
+    """
+    cached = getattr(user, "_lineage_ids_cache", None)
+    if cached is not None:
+        return cached
+    from .services import ancestors, descendants  # services нь models-ийг импортолдог
+
+    ids = frozenset()
+    person = Person.objects.alive().filter(linked_user_id=user.pk).first()
+    if person is not None:
+        ids = frozenset(ancestors(person)) | frozenset(descendants(person))
+    user._lineage_ids_cache = ids
+    return ids
+
+
 class PersonQuerySet(models.QuerySet):
     def alive(self):
         """Нэгтгэгдэж устсан (merged_into) бичлэгүүдийг хасна."""
@@ -373,8 +393,9 @@ class PersonQuerySet(models.QuerySet):
     def editable_by(self, user):
         """Хэрэглэгчийн ЗАСАХ эрхтэй хүмүүс.
 
-        Засварлагч зөвхөн өөрийн нэмсэн, «Нээлттэй» гэж тэмдэглэсэн, эсвэл
-        оруулсан нь тодорхойгүй (хуучин) хүнийг засна. Админ хязгааргүй.
+        Засварлагч зөвхөн өөрийн нэмсэн, «Нээлттэй» гэж тэмдэглэсэн, оруулсан
+        нь тодорхойгүй (хуучин) хүн, эсвэл өөрийн өвөг дээдэс / үр хойчсыг
+        засна. Админ хязгааргүй.
 
         `Person.can_edit_by`-тай ЯГ ижил дүрэм байх ёстой — хоёулаа хамт
         өөрчлөгдөнө (README-ийн `_link` ↔ `_blocked_for_relation` хоёрын адил).
@@ -393,6 +414,7 @@ class PersonQuerySet(models.QuerySet):
         # хүний `own` нь үл хамаарна — `can_edit_by`-тай ижил.
         return qs.filter(
             own | Q(created_by=user) | Q(created_by__isnull=True) | Q(is_open_for_edit=True)
+            | Q(pk__in=_lineage_ids(user))
         ).exclude(Q(visibility=Person.Visibility.CLOSED) & ~own)
 
     def search(self, text):
@@ -680,7 +702,10 @@ class Person(models.Model):
             return False
         if self.created_by_id is None or self.is_open_for_edit:
             return True
-        return self.created_by_id == getattr(user, "pk", None)
+        if self.created_by_id == getattr(user, "pk", None):
+            return True
+        # Өөрийн өвөг дээдэс / үр хойчис (холбогдсон хүнээс CTE-ээр).
+        return self.pk in _lineage_ids(user)
 
     # Template-ууд `p.is_hidden`-ээр «харагдахгүй хүний» placeholder-ыг ялгана
     # (`services.HiddenPerson` нь `True`). Жинхэнэ хүн хэзээ ч placeholder биш.
