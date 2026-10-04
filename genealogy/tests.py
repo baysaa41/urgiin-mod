@@ -4,6 +4,12 @@
 """
 
 import io
+from uuid import UUID as _UUID
+
+
+def UUID(value):
+    """JSON-оос ирсэн текст id-г UUID болгоно; аль хэдийн UUID бол хэвээр."""
+    return value if isinstance(value, _UUID) else _UUID(str(value))
 from io import StringIO
 from datetime import date, timedelta
 
@@ -506,7 +512,7 @@ class ViewerVisibilityGuaranteeTests(TreeBuilderMixin, TestCase):
         self.assertEqual(r.status_code, 404)
 
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.viewer)
-        node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertTrue(node["hidden"])
         self.assertEqual(node["name"], "•••")
 
@@ -609,7 +615,7 @@ class ClosedVisibilityTests(TreeBuilderMixin, TestCase):
         data = self.client.get(
             reverse("genealogy:tree_data", args=[self.child.pk])
             + "?mode=ancestors&depth=3").json()
-        node = next(n for n in data["nodes"] if n["id"] == self.father.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.father.pk)
         self.assertTrue(node["hidden"])
         self.assertTrue(node["closed"])
 
@@ -620,7 +626,7 @@ class ClosedVisibilityTests(TreeBuilderMixin, TestCase):
         data = self.client.get(
             reverse("genealogy:tree_data", args=[self.child.pk])
             + "?mode=ancestors&depth=3").json()
-        node = next(n for n in data["nodes"] if n["id"] == self.father.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.father.pk)
         self.assertFalse(node["hidden"])
 
     def test_closed_person_absent_from_search(self):
@@ -935,7 +941,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
 
     def test_graph_shape(self):
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor)
-        ids = {n["id"] for n in data["nodes"]}
+        ids = {UUID(n["id"]) for n in data["nodes"]}
         self.assertIn(self.child.pk, ids)
         self.assertIn(self.grandpa.pk, ids)
         self.assertTrue(any(n["root"] for n in data["nodes"]))
@@ -943,7 +949,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
     def test_graph_nodes_carry_relation_label(self):
         """Зангилаа бүр төвийн хүнтэй харьцах хамаатнаа хаалтанд харуулна."""
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[self.father.pk]["relation"], "эцэг")
         self.assertEqual(by_id[self.mother.pk]["relation"], "эх")
         self.assertEqual(by_id[self.grandpa.pk]["relation"], "өвөг эцэг")
@@ -953,7 +959,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
 
     def test_graph_descendant_relation_labels(self):
         data = build_graph(self.grandpa, mode="descendants", max_depth=3, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[self.father.pk]["relation"], "хүү")
         self.assertEqual(by_id[self.child.pk]["relation"], "ач/зээ")
         self.assertEqual(by_id[self.grandchild.pk]["relation"], "жич")
@@ -963,7 +969,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
         Person.objects.filter(pk=self.grandpa.pk).update(visibility=Person.Visibility.CLOSED)
         viewer = User.objects.create_user(email="hidden-rel@example.com", password="x")
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=viewer)
-        hidden = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        hidden = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertTrue(hidden["hidden"])
         self.assertIsNone(hidden["relation"])
 
@@ -974,7 +980,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
             birth_date=FlexDate.create_from_text("1880"))
         viewer = User.objects.create_user(email="private-node@example.com", password="x")
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=viewer)
-        node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
 
         self.assertFalse(node["hidden"])
         self.assertTrue(node["masked"])
@@ -994,7 +1000,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
         Person.objects.filter(pk=self.grandma.pk).update(sex=Person.Sex.UNKNOWN)
         viewer = User.objects.create_user(email="sex-leak@example.com", password="x")
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=viewer)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[self.grandpa.pk]["sex"], "U")
         # Эмээгийн хүйс өвөөгөөс (хаалттай) таагдахгүй — тодорхойгүй хэвээр.
         self.assertEqual(by_id[self.grandma.pk]["sex"], "U")
@@ -1009,7 +1015,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
         """«Хаалттай» хүнийг засварлагч ч харахгүй — зөвхөн админ."""
         Person.objects.filter(pk=self.grandpa.pk).update(visibility=Person.Visibility.CLOSED)
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor)
-        node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertTrue(node["hidden"])
         self.assertEqual(node["name"], "•••")
         self.assertEqual(node["lifespan"], "")
@@ -1028,7 +1034,7 @@ class GraphTests(TreeBuilderMixin, TestCase):
         ChildLink.objects.create(family=self.parent_family, child=dup)
         merge_persons(self.child, dup)
         data = build_graph(self.father, mode="descendants", max_depth=2, user=self.editor)
-        self.assertNotIn(dup.pk, {n["id"] for n in data["nodes"]})
+        self.assertNotIn(dup.pk, {UUID(n["id"]) for n in data["nodes"]})
 
 
 class MissingParentSuggestionTests(TreeBuilderMixin, TestCase):
@@ -1320,7 +1326,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
     def _codes(self, person=None, mode="ancestors", max_depth=3, user=None):
         data = build_graph(person or self.child, mode=mode, max_depth=max_depth,
                            user=user or self.editor)
-        return {n["id"]: n["path_code"] for n in data["nodes"]}
+        return {UUID(n["id"]): n["path_code"] for n in data["nodes"]}
 
     def test_ancestor_paths_trace_from_root(self):
         paths = ancestor_paths(self.child, max_depth=3)
@@ -1370,7 +1376,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
         ChildLink.objects.create(family=self.child_family, child=kid)
 
         data = build_graph(self.child, mode="descendants", max_depth=1, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[kid.pk]["birth_sort"], 1985)
         self.assertEqual(by_id[self.grandchild.pk]["birth_sort"], 9999)   # огноогүй
         self.assertTrue(all("birth_sort" in n for n in data["nodes"]))
@@ -1380,21 +1386,21 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
         Person.objects.filter(pk=self.grandpa.pk).update(linked_user=self.editor)
         self.client.force_login(self.editor)
         r = self.client.get(reverse("genealogy:tree"))
-        self.assertContains(r, f"let ROOT_ID = {self.grandpa.pk};")
+        self.assertContains(r, f'let ROOT_ID = "{self.grandpa.pk}";')
 
     def test_tree_without_pk_falls_back_to_first_person(self):
         """Холбоос байхгүй бол хамгийн эрт бүртгэгдсэн хүн (хуучин зан төлөв)."""
         self.client.force_login(self.editor)
-        first = Person.objects.visible_to(self.editor).order_by("pk").first()
+        first = Person.objects.visible_to(self.editor).order_by("created_at", "pk").first()
         r = self.client.get(reverse("genealogy:tree"))
-        self.assertContains(r, f"let ROOT_ID = {first.pk};")
+        self.assertContains(r, f'let ROOT_ID = "{first.pk}";')
 
     def test_tree_with_pk_ignores_the_link(self):
         """pk заасан бол холбоос үл хамаарна — тэр хүн л төв болно."""
         Person.objects.filter(pk=self.grandpa.pk).update(linked_user=self.editor)
         self.client.force_login(self.editor)
         r = self.client.get(reverse("genealogy:tree_person", args=[self.child.pk]))
-        self.assertContains(r, f"let ROOT_ID = {self.child.pk};")
+        self.assertContains(r, f'let ROOT_ID = "{self.child.pk}";')
 
     def test_linked_closed_person_still_becomes_the_root(self):
         """«Хаалттай» байсан ч холбогдсон хүн өөрт нь төв болж харагдана."""
@@ -1402,7 +1408,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
             visibility=Person.Visibility.CLOSED, linked_user=self.editor)
         self.client.force_login(self.editor)
         r = self.client.get(reverse("genealogy:tree"))
-        self.assertContains(r, f"let ROOT_ID = {self.child.pk};")
+        self.assertContains(r, f'let ROOT_ID = "{self.child.pk}";')
 
     def test_tree_can_zoom_to_the_root(self):
         """Том мод дээр гол хүнээ ТОМРУУЛААД харах боломжтой.
@@ -1470,8 +1476,8 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
                                  child=nephew)
 
         data = build_graph(root, mode="descendants", max_depth=2, user=self.editor)
-        order = {n["id"]: n["order"] for n in data["nodes"]}
-        rows = {n["id"]: n["row"] for n in data["nodes"]}
+        order = {UUID(n["id"]): n["order"] for n in data["nodes"]}
+        rows = {UUID(n["id"]): n["row"] for n in data["nodes"]}
 
         # 1-р үе: ахмад эгч дүүгээсээ урд.
         self.assertEqual(rows[sister.pk], rows[brother.pk])
@@ -1493,7 +1499,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
             ChildLink.objects.create(family=fam, child=kid)
 
         data = build_graph(root, mode="descendants", max_depth=1, user=self.editor)
-        order = {n["id"]: n["order"] for n in data["nodes"]}
+        order = {UUID(n["id"]): n["order"] for n in data["nodes"]}
         self.assertEqual([order[k.pk] for k in kids], [0, 1, 2])   # төрсөн оноор
 
     def test_tree_root_has_edit_link(self):
@@ -1527,7 +1533,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
         self.assertContains(r, "d3.group(nodes, d => d.row)")
 
         data = build_graph(self.child, mode="ancestors", max_depth=2, user=self.editor)
-        rows = {n["id"]: n["row"] for n in data["nodes"]}
+        rows = {UUID(n["id"]): n["row"] for n in data["nodes"]}
         self.assertEqual(rows[self.child.pk], 0)
         self.assertLess(rows[self.father.pk], 0)
         self.assertLess(rows[self.grandpa.pk], rows[self.father.pk])
@@ -1535,7 +1541,7 @@ class AncestorPathCodeTests(TreeBuilderMixin, TestCase):
     def test_both_mode_uses_branch_for_relation_label(self):
         """«Нэгдсэн» горимд өвөг нь өвгийн, үр хойчис нь үр хойшсын шошготой."""
         data = build_graph(self.child, mode="both", max_depth=2, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[self.father.pk]["relation"], "эцэг")   # дээшээ
         self.assertEqual(by_id[self.grandpa.pk]["relation"], "өвөг эцэг")
         self.assertEqual(by_id[self.grandchild.pk]["relation"], "хүү")  # доошоо
@@ -1626,7 +1632,7 @@ class EffectiveSexTests(TreeBuilderMixin, TestCase):
         ChildLink.objects.create(family=family, child=kid)
 
         data = build_graph(kid, mode="ancestors", max_depth=1, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertEqual(by_id[father.pk]["sex"], "M")
         self.assertEqual(by_id[father.pk]["relation"], "эцэг")
         self.assertEqual(by_id[father.pk]["path_code"], "А")   # А = аав
@@ -1827,12 +1833,12 @@ class PersonEditPermissionTests(TreeBuilderMixin, TestCase):
 
     def test_tree_node_carries_can_edit_flag(self):
         data = build_graph(self.null_owner, mode="ancestors", max_depth=2, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertTrue(by_id[self.null_owner.pk]["can_edit"])
         self.assertIn("can_edit", by_id[self.father.pk])
 
         data = build_graph(self.foreign, mode="descendants", max_depth=1, user=self.editor)
-        by_id = {n["id"]: n for n in data["nodes"]}
+        by_id = {UUID(n["id"]): n for n in data["nodes"]}
         self.assertFalse(by_id[self.foreign.pk]["can_edit"])
 
 
@@ -1915,7 +1921,7 @@ class ViewTests(TreeBuilderMixin, TestCase):
         Person.objects.filter(pk=self.grandpa.pk).update(visibility=Person.Visibility.CLOSED)
         self.client.force_login(self.viewer)
         data = self.client.get(self.url_tree_data + "?mode=ancestors&depth=4").json()
-        grandpa_node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        grandpa_node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertTrue(grandpa_node["hidden"])
         self.assertEqual(grandpa_node["name"], "•••")
 
@@ -1926,7 +1932,7 @@ class ViewTests(TreeBuilderMixin, TestCase):
             birth_date=FlexDate.create_from_text("1880"))
         self.client.force_login(self.viewer)
         data = self.client.get(self.url_tree_data + "?mode=ancestors&depth=4").json()
-        node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertFalse(node["hidden"])
         self.assertTrue(node["masked"])
         self.assertEqual(node["lifespan"], "")
@@ -1941,9 +1947,9 @@ class ViewTests(TreeBuilderMixin, TestCase):
         self.client.force_login(self.viewer)
         url = reverse("genealogy:tree_data", args=[self.grandpa.pk])
         data = self.client.get(url + "?mode=descendants&depth=4").json()
-        grandpa_node = next(n for n in data["nodes"] if n["id"] == self.grandpa.pk)
+        grandpa_node = next(n for n in data["nodes"] if UUID(n["id"]) == self.grandpa.pk)
         self.assertFalse(grandpa_node["hidden"])
-        father_node = next(n for n in data["nodes"] if n["id"] == self.father.pk)
+        father_node = next(n for n in data["nodes"] if UUID(n["id"]) == self.father.pk)
         self.assertTrue(father_node["hidden"])
 
     # -- quick-add (HTMX) --------------------------------------------------
@@ -2993,8 +2999,8 @@ class DeceasedDisplayTests(TreeBuilderMixin, TestCase):
         data = self.client.get(
             reverse("genealogy:tree_data", args=[self.child.pk]) + "?mode=ancestors&depth=2"
         ).json()
-        father_node = next(n for n in data["nodes"] if n["id"] == self.father.pk)
-        child_node = next(n for n in data["nodes"] if n["id"] == self.child.pk)
+        father_node = next(n for n in data["nodes"] if UUID(n["id"]) == self.father.pk)
+        child_node = next(n for n in data["nodes"] if UUID(n["id"]) == self.child.pk)
         self.assertTrue(father_node["deceased"])
         self.assertFalse(child_node["deceased"])
 
@@ -3094,7 +3100,7 @@ class AdoptionTests(TreeBuilderMixin, TestCase):
     def test_tree_includes_adoptive_parent_by_default(self):
         adopt = self._adoptive_setup()
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor)
-        ids = {n["id"] for n in data["nodes"]}
+        ids = {UUID(n["id"]) for n in data["nodes"]}
         self.assertIn(adopt.pk, ids)
         self.assertIn(self.father.pk, ids)
 
@@ -3102,7 +3108,7 @@ class AdoptionTests(TreeBuilderMixin, TestCase):
         adopt = self._adoptive_setup()
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor,
                            bloodline_only=True)
-        ids = {n["id"] for n in data["nodes"]}
+        ids = {UUID(n["id"]) for n in data["nodes"]}
         self.assertNotIn(adopt.pk, ids)
         self.assertIn(self.father.pk, ids)
 
@@ -3110,10 +3116,10 @@ class AdoptionTests(TreeBuilderMixin, TestCase):
         adopt = self._adoptive_setup()
         data = build_graph(self.child, mode="ancestors", max_depth=3, user=self.editor)
         edge = next(l for l in data["links"]
-                    if l["type"] == "parent" and l["source"] == adopt.pk)
+                    if l["type"] == "parent" and UUID(l["source"]) == adopt.pk)
         self.assertEqual(edge["pedigree"], "adopted")
         birth_edge = next(l for l in data["links"]
-                          if l["type"] == "parent" and l["source"] == self.father.pk)
+                          if l["type"] == "parent" and UUID(l["source"]) == self.father.pk)
         self.assertEqual(birth_edge["pedigree"], "birth")
 
     def test_tree_view_renders_bloodline_toggle(self):

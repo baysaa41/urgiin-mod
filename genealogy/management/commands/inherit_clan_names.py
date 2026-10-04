@@ -36,7 +36,7 @@ class Command(BaseCommand):
         self.stdout.write(f"{len(plans)} хүний ургийн овгийг нөхнө:")
         for person, father in plans:
             self.stdout.write(
-                f"  #{person.pk:<5} {person.display_name:<30} "
+                f"  #{str(person.pk)[:8]} {person.display_name:<30} "
                 f"← {father.clan_name}   (эцэг: #{father.pk} {father.display_name})")
 
         if not options["apply"]:

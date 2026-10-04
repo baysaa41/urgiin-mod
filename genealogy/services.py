@@ -35,7 +35,7 @@ def _rows(sql, params):
 
 _ANCESTORS_SQL = """
 WITH RECURSIVE anc(person_id, depth, path) AS (
-    SELECT %(root)s::bigint, 0, ARRAY[%(root)s::bigint]
+    SELECT %(root)s::uuid, 0, ARRAY[%(root)s::uuid]
   UNION ALL
     SELECT par.partner_id, a.depth + 1, a.path || par.partner_id
     FROM anc a
@@ -60,7 +60,7 @@ SELECT DISTINCT ON (person_id) person_id, depth, path FROM anc
 
 _DESCENDANTS_SQL = """
 WITH RECURSIVE des(person_id, depth, path) AS (
-    SELECT %(root)s::bigint, 0, ARRAY[%(root)s::bigint]
+    SELECT %(root)s::uuid, 0, ARRAY[%(root)s::uuid]
   UNION ALL
     SELECT cl.child_id, d.depth + 1, d.path || cl.child_id
     FROM des d

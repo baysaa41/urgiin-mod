@@ -78,7 +78,7 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
-let ROOT_ID = {{ root.pk }};
+let ROOT_ID = "{{ root.pk }}";
 let mode = "{{ mode }}";
 let depth = {{ depth }};
 let bloodline = {% if bloodline %}true{% else %}false{% endif %};

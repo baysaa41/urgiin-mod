@@ -6,6 +6,7 @@
 """
 
 import re
+import uuid
 from datetime import date
 
 from django.conf import settings
@@ -13,6 +14,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -437,6 +439,10 @@ class PersonQuerySet(models.QuerySet):
 
 class Person(models.Model):
     """Нэг хүн (GEDCOM INDI)."""
+
+    # UUID — хаягаар (/person/<id>/) дараалсан тоог эргэлдүүлэн бусдын
+    # бичлэгийг таахаас сэргийлнэ. Эрэмбэлэхэд `created_at`-ыг ашиглана.
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     class Sex(models.TextChoices):
         MALE = "M", "Эрэгтэй"
@@ -1130,7 +1136,8 @@ class Citation(models.Model):
 
     source = models.ForeignKey(Source, on_delete=models.CASCADE, related_name="citations", verbose_name="Эх сурвалж")
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveBigIntegerField()
+    # Person нь UUID, бусад нь bigint pk — хоёуланг текстээр хадгална.
+    object_id = models.CharField(max_length=64)
     content_object = GenericForeignKey("content_type", "object_id")
     page = models.CharField("Хуудас/байршил", max_length=100, blank=True)
     quality = models.CharField("Найдвартай байдал", max_length=1, choices=Quality.choices, default=Quality.SECONDARY)
@@ -1206,7 +1213,8 @@ class MediaLink(models.Model):
 
     media = models.ForeignKey(Media, on_delete=models.CASCADE, related_name="links", verbose_name="Медиа")
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveBigIntegerField()
+    # Person нь UUID, бусад нь bigint pk — хоёуланг текстээр хадгална.
+    object_id = models.CharField(max_length=64)
     content_object = GenericForeignKey("content_type", "object_id")
     is_primary = models.BooleanField("Үндсэн зураг", default=False)
     note = models.CharField("Тайлбар", max_length=200, blank=True)
@@ -1244,9 +1252,10 @@ class AuditLog(models.Model):
     )
     action = models.CharField("Үйлдэл", max_length=10, choices=Action.choices)
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, null=True, blank=True)
-    object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    object_id = models.CharField(max_length=64, null=True, blank=True)
     object_repr = models.CharField("Объект", max_length=300, blank=True)
-    changes = models.JSONField("Өөрчлөлт", default=dict, blank=True)
+    # DjangoJSONEncoder — Person.pk (UUID), огноо зэргийг шууд хадгална.
+    changes = models.JSONField("Өөрчлөлт", default=dict, blank=True, encoder=DjangoJSONEncoder)
     ip_address = models.GenericIPAddressField("IP", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

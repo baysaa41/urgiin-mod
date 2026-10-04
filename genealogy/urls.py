@@ -9,18 +9,18 @@ urlpatterns = [
 
     # Хүн
     path("person/new/", views.PersonCreateView.as_view(), name="person_create"),
-    path("person/<int:pk>/", views.person_detail, name="person_detail"),
-    path("person/<int:pk>/edit/", views.PersonUpdateView.as_view(), name="person_edit"),
-    path("person/<int:pk>/delete/", views.PersonDeleteView.as_view(), name="person_delete"),
-    path("person/<int:pk>/quick-add/<str:relation>/", views.quick_add, name="quick_add"),
-    path("person/<int:pk>/link/<str:relation>/", views.link_relative, name="link_relative"),
+    path("person/<uuid:pk>/", views.person_detail, name="person_detail"),
+    path("person/<uuid:pk>/edit/", views.PersonUpdateView.as_view(), name="person_edit"),
+    path("person/<uuid:pk>/delete/", views.PersonDeleteView.as_view(), name="person_delete"),
+    path("person/<uuid:pk>/quick-add/<str:relation>/", views.quick_add, name="quick_add"),
+    path("person/<uuid:pk>/link/<str:relation>/", views.link_relative, name="link_relative"),
     path("person/picker/", views.person_picker, name="person_picker"),
     # Хүн ↔ бүртгэл (хэрэглэгч) холбоос — засах хуудаснаас
-    path("person/<int:pk>/account/link/", views.person_account_link,
+    path("person/<uuid:pk>/account/link/", views.person_account_link,
          name="person_account_link"),
-    path("person/<int:pk>/account/unlink/", views.person_account_unlink,
+    path("person/<uuid:pk>/account/unlink/", views.person_account_unlink,
          name="person_account_unlink"),
-    path("person/<int:pk>/account/invite/", views.person_account_invite,
+    path("person/<uuid:pk>/account/invite/", views.person_account_invite,
          name="person_account_invite"),
 
     # Гэр бүл ба үйл явдал
@@ -29,8 +29,8 @@ urlpatterns = [
 
     # Мод
     path("tree/", views.tree_view, name="tree"),
-    path("tree/<int:pk>/", views.tree_view, name="tree_person"),
-    path("tree/<int:pk>/data/", views.tree_data, name="tree_data"),
+    path("tree/<uuid:pk>/", views.tree_view, name="tree_person"),
+    path("tree/<uuid:pk>/data/", views.tree_data, name="tree_data"),
 
     # Хайлт
     path("search/", views.search, name="search"),

@@ -6,6 +6,8 @@
 
 from datetime import timedelta
 
+from uuid import UUID
+
 from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
@@ -345,7 +347,7 @@ class AdminViewModeTests(TestCase):
 
     def _node(self, pk):
         data = self.client.get(self.tree_url + "?mode=ancestors&depth=3").json()
-        return next(n for n in data["nodes"] if n["id"] == pk)
+        return next(n for n in data["nodes"] if UUID(n["id"]) == pk)
 
     def test_default_is_admin_view(self):
         """Тохируулаагүй бол админ бүгдийг харна."""

@@ -5,6 +5,7 @@
 шалгадаг `serve_media` view-ээр үйлчилнэ.
 """
 
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
@@ -13,7 +14,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, CharField, Count, IntegerField, Q, Value, When
+from django.db.models.functions import Cast
 from django.utils import timezone
 from django.utils.http import content_disposition_header
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
@@ -142,9 +144,23 @@ _SEX_ROLE = {"M": "эцэг", "F": "эх"}
 DEFAULT_TREE_MODE = "both"
 
 
-def _int_or_none(value):
-    """GET параметрийг int болгоно; хоосон эсвэл тоо биш бол None."""
-    return int(value) if value and str(value).isdigit() else None
+def _uuid_or_none(value):
+    """GET/POST параметрийг Person-ийн UUID болгоно; хоосон эсвэл буруу бол None.
+
+    Буруу утгыг шууд `pk=`-д өгвөл ValidationError (500) болно — 404 байх ёстой.
+    """
+    try:
+        return uuid.UUID(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _person_or_404(queryset, value):
+    """Параметрээр ирсэн UUID-аар хүнийг олно; буруу/олдохгүй бол 404."""
+    pk = _uuid_or_none(value)
+    if pk is None:
+        raise Http404
+    return get_object_or_404(queryset, pk=pk)
 
 
 def person_detail(request, pk):
@@ -463,7 +479,7 @@ class EventCreateView(CanEditMixin, CreateView):
 
     def form_valid(self, form):
         response = super().form_valid(form)
-        person_id = self.request.POST.get("person") or self.request.GET.get("person")
+        person_id = _uuid_or_none(self.request.POST.get("person") or self.request.GET.get("person"))
         if person_id:
             from .models import EventParticipant
 
@@ -476,7 +492,7 @@ class EventCreateView(CanEditMixin, CreateView):
         return response
 
     def get_success_url(self):
-        person_id = self.request.POST.get("person") or self.request.GET.get("person")
+        person_id = _uuid_or_none(self.request.POST.get("person") or self.request.GET.get("person"))
         if person_id:
             return reverse("genealogy:person_detail", args=[person_id])
         return reverse("genealogy:home")
@@ -552,7 +568,7 @@ def tree_view(request, pk=None):
         # хэрэглэгчтэй холбогдсон хүнийг төвд авчирна — өөрийн мод хамгийн
         # ойлгомжтой. Холбоос байхгүй бол хамгийн эрт бүртгэгдсэн хүн.
         root = (people.filter(linked_user_id=getattr(request.user, "pk", None)).first()
-                or people.order_by("pk").first())
+                or people.order_by("created_at", "pk").first())
     if root is None:
         messages.info(request, "Эхлээд хүн бүртгэнэ үү.")
         return redirect("genealogy:home")
@@ -652,14 +668,14 @@ class MediaUploadView(CanEditMixin, CreateView):
         response = super().form_valid(form)
         _make_thumbnail(self.object)
         self.object.save()
-        person_id = self.request.POST.get("person")
+        person_id = _uuid_or_none(self.request.POST.get("person"))
         if person_id:
             MediaLink.objects.get_or_create(
                 media=self.object,
                 content_type=self._person_ctype(),
-                object_id=int(person_id),
+                object_id=str(person_id),
                 defaults={"is_primary": not MediaLink.objects.filter(
-                    content_type=self._person_ctype(), object_id=int(person_id)
+                    content_type=self._person_ctype(), object_id=str(person_id)
                 ).exists()},
             )
         messages.success(self.request, "Файл хадгалагдлаа.")
@@ -672,7 +688,7 @@ class MediaUploadView(CanEditMixin, CreateView):
         return ContentType.objects.get_for_model(Person)
 
     def get_success_url(self):
-        person_id = self.request.POST.get("person")
+        person_id = _uuid_or_none(self.request.POST.get("person"))
         if person_id:
             return reverse("genealogy:person_detail", args=[person_id])
         return reverse("genealogy:home")
@@ -774,12 +790,11 @@ def person_picker(request):
     # багтдаг ч хамаатан холбох эрхгүй — тэр нь `can_edit` шаардана.)
     if not getattr(request.user, "can_edit", False):
         return HttpResponse("Эрх байхгүй", status=403)
-    anchor = get_object_or_404(
-        Person.objects.editable_by(request.user), pk=request.GET.get("anchor")
-    )
+    anchor = _person_or_404(Person.objects.editable_by(request.user),
+                            request.GET.get("anchor"))
     relation = request.GET.get("relation", "child")
     query = (request.GET.get("q") or "").strip()
-    selected = _int_or_none(request.GET.get("selected"))
+    selected = _uuid_or_none(request.GET.get("selected"))
 
     # Зөвхөн засах эрхтэй хүмүүсийг санал болгоно — эс бөгөөс засварлагч
     # бусдын хүнийг удмын модонд холбож чадна.
@@ -838,7 +853,7 @@ def link_relative(request, pk, relation):
     # `?person=<pk>` — «Дутуу холбоос»-ын санал болгосон хүнийг урьдчилан сонгоно.
     return render(request, "genealogy/partials/_link_modal.html",
                   {"form": form, "anchor": anchor, "relation": relation,
-                   "selected": _int_or_none(request.GET.get("person"))})
+                   "selected": _uuid_or_none(request.GET.get("person"))})
 
 
 
@@ -1045,10 +1060,9 @@ def merge_view(request):
     # Нэгтгэл нь ХОЁР хүний талбарыг хоёуланг нь өөрчилдөг (`merge_persons`
     # duplicate-ийн холбоог keep рүү шилжүүлж, keep-ийн хоосон талбарыг
     # бөглөнө) тул хоёуланд нь засах эрх шаардана.
-    keep = get_object_or_404(Person.objects.editable_by(request.user),
-                             pk=request.POST.get("keep"))
-    duplicate = get_object_or_404(Person.objects.editable_by(request.user),
-                                  pk=request.POST.get("duplicate"))
+    keep = _person_or_404(Person.objects.editable_by(request.user), request.POST.get("keep"))
+    duplicate = _person_or_404(Person.objects.editable_by(request.user),
+                               request.POST.get("duplicate"))
     try:
         services.merge_persons(keep, duplicate, user=request.user)
         messages.success(request, f"{duplicate.display_name} → {keep.display_name} нэгтгэгдлээ.")
@@ -1065,7 +1079,9 @@ def audit_list(request):
     # аудит бүртгэлээр дамжин засварлагчид алдарахгүй — харах эрхтэй хүмүүсийн
     # бүртгэлийг л харуулна.
     person_ct = ContentType.objects.get_for_model(Person)
-    visible_ids = Person.objects.visible_to(request.user).values_list("pk", flat=True)
+    # object_id нь varchar, Person.pk нь uuid — subquery-д текст болгон харьцуулна.
+    visible_ids = (Person.objects.visible_to(request.user)
+                   .annotate(pk_text=Cast("pk", CharField())).values_list("pk_text", flat=True))
     logs = (AuditLog.objects.select_related("user", "content_type")
             .filter(Q(content_type=person_ct, object_id__in=visible_ids)
                     | ~Q(content_type=person_ct))
