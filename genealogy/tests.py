@@ -3197,3 +3197,43 @@ class CalledNameSearchTests(TestCase):
         for q in ("Үндээ", "үндээ", "ҮНДЭЭ", "ойдов", "ОЙДОВ"):
             with self.subTest(q=q):
                 self.assertIn(p, Person.objects.search(q))
+
+
+class MediaFileCleanupTests(TestCase):
+    """Бичлэг устгах/файл солиход хуучин файл storage-аас устана."""
+
+    def _media(self):
+        from django.core.files.base import ContentFile
+
+        m = Media.objects.create(kind=Media.Kind.PHOTO, title="Цэвэрлэгээ")
+        m.file.save("clean.txt", ContentFile(b"x"), save=False)
+        m.thumbnail.save("clean.jpg", ContentFile(b"y"), save=False)
+        m.save()
+        return m
+
+    def test_delete_removes_file_and_thumbnail(self):
+        m = self._media()
+        storage, names = m.file.storage, (m.file.name, m.thumbnail.name)
+        with self.captureOnCommitCallbacks(execute=True):
+            m.delete()
+        for name in names:
+            self.assertFalse(storage.exists(name), name)
+
+    def test_replacing_file_removes_old_one(self):
+        from django.core.files.base import ContentFile
+
+        m = self._media()
+        old = m.file.name
+        with self.captureOnCommitCallbacks(execute=True):
+            m.file.save("clean2.txt", ContentFile(b"z"), save=True)
+        self.assertFalse(m.file.storage.exists(old))
+        self.assertTrue(m.file.storage.exists(m.file.name))
+
+    def test_rollback_keeps_file(self):
+        """Transaction буцаагдвал файл устахгүй (on_commit дуудагдахгүй)."""
+        m = self._media()
+        name = m.file.name
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            m.delete()
+        self.assertEqual(len(callbacks), 2)
+        self.assertTrue(m.file.storage.exists(name))
