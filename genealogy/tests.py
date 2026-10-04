@@ -356,9 +356,15 @@ class LivingAndVisibilityTests(TestCase):
         self.assertFalse(p.is_living)
         self.assertTrue(p.is_deceased)
 
-    def test_unknown_when_no_dates(self):
+    def test_living_by_default_when_no_dates(self):
+        """Анхдагч нь амьд — огноо, тэмдэг аль нь ч байхгүй бол."""
         p = Person.objects.create(given_name="Огноогүй")
-        self.assertEqual(p.life_status, Person.LifeStatus.UNKNOWN)
+        self.assertEqual(p.life_status, Person.LifeStatus.LIVING)
+        self.assertFalse(p.can_view(None))          # амьд тул аноним харахгүй
+
+    def test_override_false_marks_undated_deceased(self):
+        p = Person.objects.create(given_name="Өвөг", living_override=False)
+        self.assertTrue(p.is_deceased)
 
     def test_auto_visibility_public_for_deceased(self):
         p = Person.objects.create(given_name="Өвөг", birth_date=FlexDate.create_from_text("1850"))

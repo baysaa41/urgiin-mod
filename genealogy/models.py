@@ -615,16 +615,16 @@ class Person(models.Model):
     def life_status(self):
         """Гараар заасан бол түүнийг, эс бөгөөс огнооноос таамаглана.
 
-        Огноо огт байхгүй бол UNKNOWN — нууцлалын хувьд амьд мэт хамгаална.
+        Анхдагч нь АМЬД: огноо ч, гар тэмдэг ч байхгүй бол амьд гэж үзнэ
+        (нууцлалын хувьд ч аюулгүй тал). Нас барсан өвгийг `living_override`
+        эсвэл нас барсан огноогоор тэмдэглэнэ.
         """
         if self.living_override is not None:
             return self.LifeStatus.LIVING if self.living_override else self.LifeStatus.DECEASED
         if self.death_date_id is not None:
             return self.LifeStatus.DECEASED
         birth = self.birth_date.year if self.birth_date else None
-        if birth is None:
-            return self.LifeStatus.UNKNOWN
-        if (timezone.now().year - birth) < settings.LIVING_YEARS:
+        if birth is None or (timezone.now().year - birth) < settings.LIVING_YEARS:
             return self.LifeStatus.LIVING
         return self.LifeStatus.DECEASED
 
