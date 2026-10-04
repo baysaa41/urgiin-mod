@@ -3107,3 +3107,27 @@ class AdoptionTests(TreeBuilderMixin, TestCase):
             HTTP_HX_REQUEST="true")
         self.assertContains(response, 'name="pedigree"')
         self.assertContains(response, "Өргөмөл")
+
+
+class UserMenuTests(TreeBuilderMixin, TestCase):
+    """Navbar-ын хэрэглэгчийн цэс: нэр, эрх, өөрийн холбоос, гарах."""
+
+    def setUp(self):
+        self.build_family()
+        self.user = User.objects.create_user(email="menu@example.com", password="x",
+                                             role=User.Role.EDITOR)
+
+    def test_menu_shows_role_and_logout(self):
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("genealogy:home")).content.decode()
+        self.assertIn("menu@example.com", html)
+        self.assertIn("Засварлагч", html)
+        self.assertIn(reverse("accounts:logout"), html)
+        self.assertNotIn("Миний профайл", html)
+
+    def test_menu_links_to_own_person_and_tree(self):
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.user)
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("genealogy:home")).content.decode()
+        self.assertIn(reverse("genealogy:person_detail", args=[self.child.pk]), html)
+        self.assertIn(reverse("genealogy:tree_person", args=[self.child.pk]), html)
