@@ -1371,6 +1371,11 @@ class SiteSettings(models.Model):
     living_years = models.PositiveSmallIntegerField(
         "Амьд хүний жил", default=110,
         help_text="Хэдэн жилээс өмнө төрснийг нас барсан гэж үзэх вэ.")
+    full_tree_within_distance = models.BooleanField(
+        "Зай доторх хүний бүтэн мод", default=False,
+        help_text=("Асаавал: үзэгч өөрөөсөө зай дотор багтсан хүний мод руу "
+                   "ороход тэр мод ОГТ тайрагдахгүй. Унтраалттай бол зөвхөн "
+                   "ойрын хамаатан (ба өвөг/үр хүүхэд) харагдана."))
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

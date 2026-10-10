@@ -47,6 +47,9 @@
             {% if person.clan_name %} · Ургийн овог: {{ person.clan_name }}{% endif %}
             {% if person.sex %} · Хүйс: {{ person.get_sex_display }}{% endif %}
         </div>
+        {% if distance_from_me %}
+            <div class="small text-muted mt-1">{{ distance_from_me }}</div>
+        {% endif %}
         {% if person.birth_date or person.death_date or person.birth_place or person.death_place %}
             <dl class="row small mb-0 mt-2">
                 <dt class="col-auto text-muted fw-normal">Төрсөн:</dt>

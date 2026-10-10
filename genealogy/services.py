@@ -420,20 +420,21 @@ def suggest_parents(person, user, limit=5):
     return result
 
 
-def people_within(person, max_distance):
-    """`person`-оос `max_distance` алхам доторх хүмүүсийн id (frozenset).
+def distances_from(person, max_distance, target=None):
+    """`{person_id: алхмын тоо}` — `person`-оос `max_distance` хүртэлх BFS.
 
     Нэг алхам = гэр бүлийн нэг холбоо: хамтрагч, хүүхэд, эцэг/эх. Ингэснээр
     ах дүү 2 алхам (эцэг/эхээр дамжин), үеэл 4 алхам болно. `person` өөрөө
-    үргэлж багтана.
+    `0` зайтайгаар үргэлж багтана.
 
-    `max_distance=0` бол зөвхөн өөрөө. Сөрөг бол хоосон.
+    `max_distance=0` бол зөвхөн өөрөө; сөрөг бол хоосон. `target` өгвөл
+    олдмогцоо зогсоно (`distance_between` — бүх модыг тойрохгүй).
     """
     if max_distance is None or max_distance < 0:
-        return frozenset()
-    seen = {person.pk}
+        return {}
+    distances = {person.pk: 0}
     frontier = {person.pk}
-    for _ in range(max_distance):
+    for step in range(1, max_distance + 1):
         if not frontier:
             break
         # Нэг алхам: (а) тухайн хүн хамтрагч болж буй гэр бүлүүд → хамтрагч
@@ -445,10 +446,25 @@ def people_within(person, max_distance):
             neighbours.update(link.child_id for link in family.children.all())
         for link in ChildLink.objects.filter(child_id__in=frontier).select_related("family"):
             neighbours.update(p.pk for p in link.family.partners)
-        neighbours -= seen
-        seen |= neighbours
+        neighbours -= distances.keys()
+        for pid in neighbours:
+            distances[pid] = step
+        if target is not None and target.pk in distances:
+            break
         frontier = neighbours
-    return frozenset(seen)
+    return distances
+
+
+def people_within(person, max_distance):
+    """`person`-оос `max_distance` алхам доторх хүмүүсийн id (frozenset)."""
+    return frozenset(distances_from(person, max_distance))
+
+
+def distance_between(a, b, max_distance=10):
+    """`a`-аас `b` хүртэлх алхмын тоо. `max_distance`-д багтахгүй бол `None`."""
+    if a is None or b is None:
+        return None
+    return distances_from(a, max_distance, target=b).get(b.pk)
 
 
 def relationship_between(a, b, max_depth=DEFAULT_MAX_GENERATIONS):

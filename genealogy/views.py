@@ -172,6 +172,30 @@ def _person_or_404(queryset, value):
     return get_object_or_404(queryset, pk=pk)
 
 
+# Профайл дээр зайг харуулах дээд хязгаар — BFS нь түвшин бүрд 2 query
+# хийдэг тул хязгааргүй тойрохгүй. Хэт хол хүнд «N-ээс хол» гэж бичнэ.
+PROFILE_DISTANCE_LIMIT = 10
+
+
+def _distance_from_viewer(request, person):
+    """«Танаас N алхмын зайд» гэсэн мэдээлэл (`None` = харуулахгүй).
+
+    Зангуу нь хэрэглэгчийн ХОЛБОГДСОН хүн — урилга нь заавал модны хүнтэй
+    холбодог тул гишүүн бүрд бий. Холбоосгүй бол (жишээ нь admin сайтаас
+    үүсгэсэн хэрэглэгч) зайг бодох «өөрөө» гэж байхгүй.
+    """
+    me = Person.objects.alive().filter(
+        linked_user_id=getattr(request.user, "pk", None)).first()
+    if me is None:
+        return None
+    if me.pk == person.pk:
+        return "Энэ бол та өөрөө"
+    distance = services.distance_between(me, person, PROFILE_DISTANCE_LIMIT)
+    if distance is None:
+        return f"Танаас {PROFILE_DISTANCE_LIMIT}-оос хол"
+    return f"Танаас {distance} алхмын зайд"
+
+
 def person_detail(request, pk):
     person = visible_person_or_404(request, pk)
 
@@ -319,6 +343,8 @@ def person_detail(request, pk):
         "person": person,
         "can_edit_person": can_edit_person,
         "person_masked": person_masked,
+        # Хэрэглэгчээс хэдэн алхмын зайд (зөвхөн нэвтэрсэн, холбоостой хүнд).
+        "distance_from_me": _distance_from_viewer(request, person),
         "masked_pks": masked_pks,
         "parent_groups": parent_groups,
         "sibling_groups": sibling_groups,
@@ -732,6 +758,11 @@ def tree_data(request, pk):
     )
     scope = _viewer_tree_scope(request.user, config)
     if scope is not None:
+        # «Зай доторх хүний бүтэн мод» асаалттай бол зай дотор багтсан хүний
+        # мод ОГТ тайрагдахгүй. (Өвөг дээдэс ба үр хүүхэд нь зайд үл хамааран
+        # `scope`-д багтдаг тул тэдний мод ч бүтэн харагдана.)
+        if config.full_tree_within_distance and person.pk in scope:
+            return JsonResponse(data)
         # Гол хүн өөрөө үргэлж үлдэнэ — эс бөгөөс мод төвгүй болно (тэр
         # хүний профайлыг үзэгч `visible_to`-гоор аль хэдийн харж чадна).
         return JsonResponse(_limit_graph(data, scope | {person.pk}))

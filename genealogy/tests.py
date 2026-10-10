@@ -57,6 +57,7 @@ from .services import (
     create_relative,
     descendant_paths,
     descendants,
+    distance_between,
     effective_sex_map,
     direct_relation_label,
     link_existing,
@@ -4320,6 +4321,16 @@ class SiteSettingsViewTests(TreeBuilderMixin, TestCase):
         self.assertEqual(SiteSettings.objects.count(), 1)
         self.assertEqual(SiteSettings.load().default_tree_depth, 2)
 
+    def test_full_tree_flag_can_be_turned_on(self):
+        self.client.force_login(self.admin)
+        self.client.post(self.url, {**self.data, "full_tree_within_distance": "on"})
+        self.assertTrue(SiteSettings.load().full_tree_within_distance)
+
+    def test_full_tree_flag_is_off_when_not_posted(self):
+        self.client.force_login(self.admin)
+        self.client.post(self.url, self.data)
+        self.assertFalse(SiteSettings.load().full_tree_within_distance)
+
     def test_default_depth_above_max_is_rejected(self):
         self.client.force_login(self.admin)
         response = self.client.post(self.url, {**self.data, "default_tree_depth": 8,
@@ -4446,6 +4457,34 @@ class ViewerTreeDistanceTests(TreeBuilderMixin, TestCase):
         url = reverse("genealogy:tree_data", args=[self.child.pk])
         self.assertTrue(self.client.get(url).json()["limited"])
 
+    # --- «Зай доторх хүний бүтэн мод» тохиргоо ------------------------------
+    def test_full_tree_flag_is_off_by_default(self):
+        self.assertFalse(SiteSettings.load().full_tree_within_distance)
+
+    def test_flag_off_trims_even_a_near_root(self):
+        """Анхдагч: зай доторх хүний мод ч тайрагдана."""
+        ids = self._node_ids(self.father, self.viewer, mode="siblings")
+        self.assertNotIn(str(self.sib.pk), ids)
+
+    def test_flag_on_shows_the_full_tree_of_a_near_root(self):
+        """Зай доторх хүний мод бүтнээр — ах дүү (2 алхам) ч харагдана."""
+        SiteSettings.objects.update(full_tree_within_distance=True)
+        ids = self._node_ids(self.father, self.viewer, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)
+        self.assertIn(str(self.nephew.pk), ids)
+
+    def test_flag_on_does_not_open_a_far_root(self):
+        """Зайнаас гадуур хүний мод хязгаарлагдсан хэвээр."""
+        SiteSettings.objects.update(full_tree_within_distance=True)
+        ids = self._node_ids(self.sib, self.viewer, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)          # root үргэлж үлдэнэ
+        self.assertNotIn(str(self.nephew.pk), ids)    # ахын хүү — тайрагдана
+
+    def test_flag_does_not_affect_editors(self):
+        SiteSettings.objects.update(full_tree_within_distance=False)
+        ids = self._node_ids(self.father, self.editor, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)
+
 
 class TreeDepthSettingTests(TreeBuilderMixin, TestCase):
     """Модны үе нь админы тохиргооноос уншигдана."""
@@ -4484,3 +4523,58 @@ class TreeDepthSettingTests(TreeBuilderMixin, TestCase):
         self.assertFalse(
             Person.objects.filter(Person.objects.deceased_q()).filter(pk=old.pk).exists(),
             "200 жилийн хязгаарт 1900 онд төрсөн хүн амьд гэж үзэгдэнэ")
+
+
+class ProfileDistanceTests(TreeBuilderMixin, TestCase):
+    """Профайл дээр «Танаас N алхмын зайд» харуулна."""
+
+    def setUp(self):
+        self.build_family()
+        self.viewer = User.objects.create_user(email="profd@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.viewer)
+        self.sib = Person.objects.create(given_name="Ах")
+        ChildLink.objects.create(family=self.parent_family, child=self.sib)
+        self.client.force_login(self.viewer)
+
+    def _page(self, person):
+        return self.client.get(reverse("genealogy:person_detail", args=[person.pk]))
+
+    def test_own_record_says_so(self):
+        self.assertContains(self._page(self.child), "Энэ бол та өөрөө")
+
+    def test_parent_is_one_step(self):
+        self.assertContains(self._page(self.father), "Танаас 1 алхмын зайд")
+
+    def test_sibling_is_two_steps(self):
+        self.assertContains(self._page(self.sib), "Танаас 2 алхмын зайд")
+
+    def test_grandparent_is_two_steps(self):
+        self.assertContains(self._page(self.grandpa), "Танаас 2 алхмын зайд")
+
+    def test_grandchild_is_one_step(self):
+        self.assertContains(self._page(self.grandchild), "Танаас 1 алхмын зайд")
+
+    def test_user_without_a_linked_person_sees_nothing(self):
+        stranger = User.objects.create_user(email="profd-stranger@example.com", password="x")
+        self.client.force_login(stranger)
+        response = self._page(self.child)
+        self.assertNotContains(response, "алхмын зайд")
+        self.assertNotContains(response, "Энэ бол та өөрөө")
+
+    def test_editor_also_sees_the_distance(self):
+        self.client.force_login(self.editor_user())
+        self.assertContains(self._page(self.father), "Танаас 1 алхмын зайд")
+
+    def editor_user(self):
+        user = User.objects.create_user(email="profd-editor@example.com", password="x",
+                                        role=User.Role.EDITOR)
+        Person.objects.filter(pk=self.child.pk).update(linked_user=user)
+        return user
+
+    def test_distance_between_stops_at_the_limit(self):
+        self.assertIsNone(distance_between(self.child, self.grandpa, 1))
+        self.assertEqual(distance_between(self.child, self.grandpa, 2), 2)
+
+    def test_distance_between_self_is_zero(self):
+        self.assertEqual(distance_between(self.child, self.child, 5), 0)

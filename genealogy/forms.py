@@ -387,7 +387,8 @@ class SiteSettingsForm(BootstrapFormMixin, forms.ModelForm):
     class Meta:
         model = SiteSettings
         fields = ["default_tree_depth", "max_tree_depth",
-                  "viewer_tree_distance", "living_years"]
+                  "viewer_tree_distance", "full_tree_within_distance",
+                  "living_years"]
 
 
 class SourceForm(BootstrapFormMixin, forms.ModelForm):
