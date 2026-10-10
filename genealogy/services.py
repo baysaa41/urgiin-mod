@@ -420,6 +420,37 @@ def suggest_parents(person, user, limit=5):
     return result
 
 
+def people_within(person, max_distance):
+    """`person`-оос `max_distance` алхам доторх хүмүүсийн id (frozenset).
+
+    Нэг алхам = гэр бүлийн нэг холбоо: хамтрагч, хүүхэд, эцэг/эх. Ингэснээр
+    ах дүү 2 алхам (эцэг/эхээр дамжин), үеэл 4 алхам болно. `person` өөрөө
+    үргэлж багтана.
+
+    `max_distance=0` бол зөвхөн өөрөө. Сөрөг бол хоосон.
+    """
+    if max_distance is None or max_distance < 0:
+        return frozenset()
+    seen = {person.pk}
+    frontier = {person.pk}
+    for _ in range(max_distance):
+        if not frontier:
+            break
+        # Нэг алхам: (а) тухайн хүн хамтрагч болж буй гэр бүлүүд → хамтрагч
+        # ба хүүхдүүд, (б) тухайн хүн ХҮҮХЭД болж буй холбоо → эцэг/эх.
+        neighbours = set()
+        for family in (Family.objects.filter(models_q_family(frontier))
+                       .prefetch_related("children")):
+            neighbours.update(p.pk for p in family.partners)
+            neighbours.update(link.child_id for link in family.children.all())
+        for link in ChildLink.objects.filter(child_id__in=frontier).select_related("family"):
+            neighbours.update(p.pk for p in link.family.partners)
+        neighbours -= seen
+        seen |= neighbours
+        frontier = neighbours
+    return frozenset(seen)
+
+
 def relationship_between(a, b, max_depth=DEFAULT_MAX_GENERATIONS):
     """Хоёр хүний хамаатны ойролцоо тодорхойлолт.
 

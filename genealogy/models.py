@@ -359,7 +359,8 @@ class PersonQuerySet(models.QuerySet):
         Огноо огт байхгүй бол «нас барсан» гэж ҮЗЭХГҮЙ — тодорхойгүй хүнийг
         амьд мэт хамгаална (нууцлалын аюулгүй тал).
         """
-        cutoff = date(timezone.now().year - settings.LIVING_YEARS, 1, 1)
+        # «Амьд хүний жил» нь админы тохируулдаг параметр (`SiteSettings`).
+        cutoff = date(timezone.now().year - SiteSettings.load().living_years, 1, 1)
         return (
             Q(living_override=False)
             | Q(living_override__isnull=True, death_date__isnull=False)
@@ -630,7 +631,7 @@ class Person(models.Model):
         if self.death_date_id is not None:
             return self.LifeStatus.DECEASED
         birth = self.birth_date.year if self.birth_date else None
-        if birth is None or (timezone.now().year - birth) < settings.LIVING_YEARS:
+        if birth is None or (timezone.now().year - birth) < SiteSettings.load().living_years:
             return self.LifeStatus.LIVING
         return self.LifeStatus.DECEASED
 
@@ -1339,3 +1340,62 @@ class PersonEditRequest(models.Model):
     @property
     def is_pending(self):
         return self.status == self.Status.PENDING
+
+
+# ---------------------------------------------------------------------------
+# Сайтын тохиргоо
+# ---------------------------------------------------------------------------
+
+
+class SiteSettings(models.Model):
+    """Сайтын хэмжээний тохиргоо — НЭГ л мөр (singleton).
+
+    Админ апп дотроос (`/manage/settings/`) засна. Утгууд нь хүсэлт бүрд
+    уншигддаг (жишээ нь `PersonQuerySet.deceased_q`) тул **кэшлэхгүй**:
+    хүснэгт нэг мөртэй, PostgreSQL-д хямд. Кэшлэвэл олон gunicorn
+    worker-ийн аль нэг нь хуучин утгыг бариад, тохиргоо «заримдаа» л
+    үйлчилнэ.
+    """
+
+    default_tree_depth = models.PositiveSmallIntegerField(
+        "Модны анхны үе", default=4,
+        help_text="Мод нээхэд хэдэн үе харагдах вэ.")
+    max_tree_depth = models.PositiveSmallIntegerField(
+        "Модны дээд үе", default=9,
+        help_text="Слайдерын ба серверийн дээд хязгаар (20-оос ихгүй).")
+    viewer_tree_distance = models.PositiveSmallIntegerField(
+        "Үзэгчийн зай", default=0,
+        help_text=("Энгийн хүн өөрөөсөө хэдэн алхам хүртэлх хүний модыг харж "
+                   "болох вэ. 0 = хязгааргүй. Өөрийн өвөг дээдэс ба үр "
+                   "хүүхэд нь үргэлж бүтнээр харагдана."))
+    living_years = models.PositiveSmallIntegerField(
+        "Амьд хүний жил", default=110,
+        help_text="Хэдэн жилээс өмнө төрснийг нас барсан гэж үзэх вэ.")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "genealogy_sitesettings"
+        verbose_name = "Сайтын тохиргоо"
+        verbose_name_plural = "Сайтын тохиргоо"
+
+    def __str__(self):
+        return "Сайтын тохиргоо"
+
+    def clean(self):
+        """Хязгаарууд — модны үе хэт том бол CTE хүндэрнэ."""
+        if self.default_tree_depth < 1:
+            raise ValidationError({"default_tree_depth": "Хамгийн багадаа 1 байна."})
+        if self.default_tree_depth > self.max_tree_depth:
+            raise ValidationError(
+                {"default_tree_depth": "Анхны үе нь дээд үеэс их байж болохгүй."})
+        if not 1 <= self.max_tree_depth <= 20:
+            raise ValidationError({"max_tree_depth": "1–20 хооронд байна."})
+        if not 0 <= self.viewer_tree_distance <= 20:
+            raise ValidationError({"viewer_tree_distance": "0–20 хооронд байна."})
+        if self.living_years < 1:
+            raise ValidationError({"living_years": "Хамгийн багадаа 1 байна."})
+
+    @classmethod
+    def load(cls):
+        """Одоогийн тохиргоо. Мөр байхгүй бол анхдагч утгатай (хадгалаагүй)."""
+        return cls.objects.first() or cls()

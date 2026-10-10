@@ -45,6 +45,7 @@
                             {% if user.is_admin %}
                                 <li><a class="dropdown-item" href="{% url 'accounts:invite_list' %}">Урилгууд</a></li>
                                 <li><a class="dropdown-item" href="{% url 'accounts:editor_request_list' %}">Editor хүсэлтүүд</a></li>
+                                <li><a class="dropdown-item" href="{% url 'genealogy:site_settings' %}">Сайтын тохиргоо</a></li>
                             {% endif %}
                             {% if user.is_staff %}
                                 <li><a class="dropdown-item" href="/admin/">Admin</a></li>

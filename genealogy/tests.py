@@ -38,6 +38,7 @@ from .models import (
     PersonEditRequest,
     PersonName,
     Place,
+    SiteSettings,
     Source,
 )
 from .forms import (
@@ -60,6 +61,7 @@ from .services import (
     direct_relation_label,
     link_existing,
     merge_persons,
+    people_within,
     person_approvers,
     person_snapshot,
     record_person_edit_request,
@@ -4170,3 +4172,315 @@ class SiblingTreeModeTests(TestCase):
         couple = next(n for n in self._graph()["nodes"] if n["row"] == -1)
         self.assertTrue(couple["deceased"])
         self.assertTrue(all(line["deceased"] for line in couple["lines"]))
+
+
+class FamilyDivorceCheckboxTests(TreeBuilderMixin, TestCase):
+    """«Салсан» чек — «Салсан огноо» нь зөвхөн чагталсан үед хадгалагдана."""
+
+    def setUp(self):
+        self.build_family()
+        self.editor = User.objects.create_user(email="fcb@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.client.force_login(self.editor)
+        self.url = reverse("genealogy:family_edit", args=[self.parent_family.pk])
+
+    def _post(self, **overrides):
+        data = {
+            "partner1": self.father.pk, "partner2": self.mother.pk,
+            "family_type": "marriage", "marriage_date": "", "divorce_date": "",
+            "marriage_place": "", "notes": "",
+        }
+        data.update(overrides)
+        return self.client.post(self.url, data)
+
+    # --- маягтын бүтэц ------------------------------------------------------
+    def test_checkbox_sits_right_before_the_divorce_date(self):
+        names = list(FamilyForm().fields)
+        self.assertEqual(names[names.index("is_divorced") + 1], "divorce_date")
+
+    def test_existing_divorce_date_pre_checks_the_box(self):
+        self.parent_family.divorce_date = FlexDate.create_from_text("1990")
+        self.parent_family.save()
+        form = FamilyForm(instance=self.parent_family)
+        self.assertTrue(form.fields["is_divorced"].initial)
+
+    def test_family_without_divorce_date_leaves_the_box_unchecked(self):
+        form = FamilyForm(instance=self.parent_family)
+        self.assertFalse(form.fields["is_divorced"].initial)
+
+    # --- хадгалалт ----------------------------------------------------------
+    def test_checked_with_a_date_saves_it(self):
+        response = self._post(is_divorced="on", divorce_date="1990")
+        self.assertEqual(response.status_code, 302)
+
+        self.parent_family.refresh_from_db()
+        self.assertIsNotNone(self.parent_family.divorce_date)
+        self.assertEqual(self.parent_family.divorce_date.year, 1990)
+
+    def test_unchecked_clears_an_existing_date(self):
+        self.parent_family.divorce_date = FlexDate.create_from_text("1990")
+        self.parent_family.save()
+
+        self._post()          # чек чагтлаагүй
+
+        self.parent_family.refresh_from_db()
+        self.assertIsNone(self.parent_family.divorce_date,
+                          "Чагтлаагүй ч огноо үлдсэн байна")
+
+    def test_checked_without_a_date_is_rejected(self):
+        """Чек нь чимээгүй хаягдахгүй — огноо заавал."""
+        response = self._post(is_divorced="on")
+
+        self.assertEqual(response.status_code, 200)      # форм дахин зурагдана
+        self.assertContains(response, "Салсан огноог оруулна уу")
+        self.parent_family.refresh_from_db()
+        self.assertIsNone(self.parent_family.divorce_date)
+
+    # --- маягтын хуудас -----------------------------------------------------
+    def test_form_page_has_the_checkbox_and_the_toggle(self):
+        response = self.client.get(self.url)
+        self.assertContains(response, 'id="id_is_divorced"')
+        self.assertContains(response, 'id="id_divorce_date"')
+        self.assertContains(response, "id_is_divorced")      # JS холболт
+
+    def test_form_page_puts_the_checkbox_before_the_date_field(self):
+        body = self.client.get(self.url).content.decode()
+        self.assertLess(body.index("id_is_divorced"), body.index("id_divorce_date"))
+
+
+class SiteSettingsModelTests(TestCase):
+    """Сайтын тохиргооны загвар — нэг мөр, анхдагч утга, хязгаарууд."""
+
+    def test_load_returns_defaults_when_empty(self):
+        config = SiteSettings.load()
+        self.assertEqual(config.default_tree_depth, 4)
+        self.assertEqual(config.max_tree_depth, 9)
+        self.assertEqual(config.viewer_tree_distance, 0)
+
+    def test_load_returns_the_stored_row(self):
+        SiteSettings.objects.create(default_tree_depth=2, max_tree_depth=6,
+                                    viewer_tree_distance=3, living_years=90)
+        config = SiteSettings.load()
+        self.assertEqual(config.default_tree_depth, 2)
+        self.assertEqual(config.viewer_tree_distance, 3)
+        self.assertEqual(config.living_years, 90)
+
+    def test_default_depth_above_max_is_invalid(self):
+        config = SiteSettings(default_tree_depth=8, max_tree_depth=4)
+        with self.assertRaises(ValidationError):
+            config.full_clean()
+
+    def test_max_depth_is_capped_at_twenty(self):
+        config = SiteSettings(default_tree_depth=1, max_tree_depth=99)
+        with self.assertRaises(ValidationError):
+            config.full_clean()
+
+    def test_distance_is_capped_at_twenty(self):
+        config = SiteSettings(viewer_tree_distance=99)
+        with self.assertRaises(ValidationError):
+            config.full_clean()
+
+
+class SiteSettingsViewTests(TreeBuilderMixin, TestCase):
+    """Тохиргооны хуудас — зөвхөн админ, нэг л мөр."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="ss-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="ss-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="ss-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.url = reverse("genealogy:site_settings")
+        self.data = {"default_tree_depth": 3, "max_tree_depth": 7,
+                     "viewer_tree_distance": 2, "living_years": 100}
+
+    def test_admin_can_open_the_page(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Модны анхны үе")
+
+    def test_admin_can_save(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(self.url, self.data)
+        self.assertEqual(response.status_code, 302)
+
+        config = SiteSettings.load()
+        self.assertEqual(config.default_tree_depth, 3)
+        self.assertEqual(config.max_tree_depth, 7)
+        self.assertEqual(config.viewer_tree_distance, 2)
+        self.assertEqual(config.living_years, 100)
+
+    def test_saving_twice_keeps_a_single_row(self):
+        self.client.force_login(self.admin)
+        self.client.post(self.url, self.data)
+        self.client.post(self.url, {**self.data, "default_tree_depth": 2})
+        self.assertEqual(SiteSettings.objects.count(), 1)
+        self.assertEqual(SiteSettings.load().default_tree_depth, 2)
+
+    def test_default_depth_above_max_is_rejected(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(self.url, {**self.data, "default_tree_depth": 8,
+                                               "max_tree_depth": 4})
+        self.assertEqual(response.status_code, 200)          # форм дахин зурагдана
+        self.assertFalse(SiteSettings.objects.exists())
+
+    def test_editor_cannot_open_the_page(self):
+        self.client.force_login(self.editor)
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+        self.assertFalse(SiteSettings.objects.exists())
+
+    def test_viewer_cannot_save(self):
+        self.client.force_login(self.viewer)
+        self.client.post(self.url, self.data)
+        self.assertFalse(SiteSettings.objects.exists())
+
+
+class PeopleWithinTests(TreeBuilderMixin, TestCase):
+    """Алхмын зай — гэр бүлийн холбоогоор BFS."""
+
+    def setUp(self):
+        self.build_family()
+        self.sib = Person.objects.create(given_name="Ах")
+        ChildLink.objects.create(family=self.parent_family, child=self.sib)
+        self.nephew = Person.objects.create(given_name="Ахын хүү")
+        ChildLink.objects.create(family=Family.objects.create(partner1=self.sib),
+                                 child=self.nephew)
+
+    def test_zero_is_only_self(self):
+        self.assertEqual(people_within(self.child, 0), frozenset({self.child.pk}))
+
+    def test_one_step_covers_parents_and_children(self):
+        ids = people_within(self.child, 1)
+        for person in (self.father, self.mother, self.grandchild):
+            self.assertIn(person.pk, ids)
+
+    def test_grandparents_are_two_steps(self):
+        self.assertNotIn(self.grandpa.pk, people_within(self.child, 1))
+        self.assertIn(self.grandpa.pk, people_within(self.child, 2))
+
+    def test_sibling_is_two_steps(self):
+        self.assertNotIn(self.sib.pk, people_within(self.child, 1))
+        self.assertIn(self.sib.pk, people_within(self.child, 2))
+
+    def test_siblings_child_is_three_steps(self):
+        self.assertNotIn(self.nephew.pk, people_within(self.child, 2))
+        self.assertIn(self.nephew.pk, people_within(self.child, 3))
+
+    def test_negative_distance_is_empty(self):
+        self.assertEqual(people_within(self.child, -1), frozenset())
+
+
+class ViewerTreeDistanceTests(TreeBuilderMixin, TestCase):
+    """Үзэгчийн зай — зөвхөн модны хуудсанд, өвөг/үр хойчид үйлчлэхгүй."""
+
+    def setUp(self):
+        self.build_family()
+        self.viewer = User.objects.create_user(email="vtd@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.editor = User.objects.create_user(email="vtd-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.viewer)
+        self.sib = Person.objects.create(given_name="Ах")
+        ChildLink.objects.create(family=self.parent_family, child=self.sib)
+        self.nephew = Person.objects.create(given_name="Ахын хүү")
+        ChildLink.objects.create(family=Family.objects.create(partner1=self.sib),
+                                 child=self.nephew)
+        SiteSettings.objects.create(viewer_tree_distance=1)
+
+    def _node_ids(self, person, user, mode="both"):
+        """Модны зангилааны id-ууд.
+
+        Ах дүү нь `both` горимд ОГТ орохгүй (зөвхөн өвөг ба үр хойчис) тул
+        ах дүүгийн шалгалтууд `mode="siblings"` ашиглана.
+        """
+        self.client.force_login(user)
+        url = reverse("genealogy:tree_data", args=[person.pk]) + f"?mode={mode}"
+        return {node["id"] for node in self.client.get(url).json()["nodes"]}
+
+    def test_viewer_sees_the_neighbourhood(self):
+        ids = self._node_ids(self.child, self.viewer)
+        self.assertIn(str(self.father.pk), ids)
+        self.assertIn(str(self.grandchild.pk), ids)
+
+    def test_sibling_outside_the_distance_is_hidden(self):
+        """Ах дүү нь 2 алхам — зай 1 үед харагдахгүй."""
+        ids = self._node_ids(self.child, self.viewer, mode="siblings")
+        self.assertNotIn(str(self.sib.pk), ids)
+
+    def test_ancestors_are_always_visible(self):
+        """Зайны хязгаар өвөг дээдэст үйлчлэхгүй — 2 алхамтай ч харагдана."""
+        ids = self._node_ids(self.child, self.viewer)
+        self.assertIn(str(self.grandpa.pk), ids)
+        self.assertIn(str(self.grandma.pk), ids)
+
+    def test_descendants_are_always_visible(self):
+        ids = self._node_ids(self.child, self.viewer)
+        self.assertIn(str(self.grandchild.pk), ids)
+
+    def test_the_root_itself_is_always_kept(self):
+        """Хол хүний модон дээр тэр хүн өөрөө үлдэнэ (төвгүй болохгүй),
+        харин түүн рүү хүрэх зам дахь ах дүү харагдахгүй."""
+        ids = self._node_ids(self.nephew, self.viewer)
+        self.assertIn(str(self.nephew.pk), ids)
+        self.assertNotIn(str(self.sib.pk), ids)
+
+    def test_a_larger_distance_opens_the_siblings(self):
+        SiteSettings.objects.update(viewer_tree_distance=2)
+        ids = self._node_ids(self.child, self.viewer, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)
+
+    def test_zero_distance_means_no_limit(self):
+        SiteSettings.objects.update(viewer_tree_distance=0)
+        ids = self._node_ids(self.child, self.viewer, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)
+
+    def test_editor_is_never_limited(self):
+        ids = self._node_ids(self.child, self.editor, mode="siblings")
+        self.assertIn(str(self.sib.pk), ids)
+
+    def test_data_marks_the_graph_as_limited(self):
+        self.client.force_login(self.viewer)
+        url = reverse("genealogy:tree_data", args=[self.child.pk])
+        self.assertTrue(self.client.get(url).json()["limited"])
+
+
+class TreeDepthSettingTests(TreeBuilderMixin, TestCase):
+    """Модны үе нь админы тохиргооноос уншигдана."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="td@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.client.force_login(self.admin)
+
+    def test_page_uses_the_configured_default_depth(self):
+        SiteSettings.objects.create(default_tree_depth=2, max_tree_depth=6)
+        response = self.client.get(reverse("genealogy:tree_person", args=[self.child.pk]))
+        self.assertContains(response, 'value="2"')
+        self.assertContains(response, 'max="6"')
+
+    def test_depth_parameter_is_clamped_to_the_maximum(self):
+        SiteSettings.objects.create(default_tree_depth=1, max_tree_depth=1)
+        url = (reverse("genealogy:tree_data", args=[self.grandchild.pk])
+               + "?mode=ancestors&depth=9")
+        names = {node["name"] for node in self.client.get(url).json()["nodes"]}
+        self.assertIn(self.child.display_name, names)        # 1 үе
+        self.assertNotIn(self.father.display_name, names)    # 2 үе — хязгаарт орохгүй
+
+    def test_living_years_setting_drives_the_deceased_cutoff(self):
+        """`living_years` нь «нас барсан» гэсэн SQL шалгуурыг удирдана."""
+        old = Person.objects.create(given_name="Эртний",
+                                    birth_date=FlexDate.create_from_text("1900"))
+
+        SiteSettings.objects.create(living_years=110)
+        self.assertTrue(
+            Person.objects.filter(Person.objects.deceased_q()).filter(pk=old.pk).exists(),
+            "110 жилийн хязгаарт 1900 онд төрсөн хүн нас барсан байх ёстой")
+
+        SiteSettings.objects.update(living_years=200)
+        self.assertFalse(
+            Person.objects.filter(Person.objects.deceased_q()).filter(pk=old.pk).exists(),
+            "200 жилийн хязгаарт 1900 онд төрсөн хүн амьд гэж үзэгдэнэ")

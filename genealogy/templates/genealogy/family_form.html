@@ -1,2 +1,17 @@
 {% extends "genealogy/_form_base.html" %}
 {% block form_title %}Гэр бүл / хос засах{% endblock %}
+{% block after_form %}
+    {# Формоос ГАДНА — талбарууд аль хэдийн DOM-д орсон байна. #}
+    <script>
+      // «Салсан» чек — «Салсан огноо» талбар нь зөвхөн чагталсан үед харагдана.
+      (function () {
+        const check = document.getElementById("id_is_divorced");
+        const date = document.getElementById("id_divorce_date");
+        if (!check || !date) return;
+        const box = date.closest("div.mb-3") || date.parentElement;
+        const sync = () => box.classList.toggle("d-none", !check.checked);
+        check.addEventListener("change", sync);
+        sync();
+      })();
+    </script>
+{% endblock %}

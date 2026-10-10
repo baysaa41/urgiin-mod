@@ -49,6 +49,7 @@ urlpatterns = [
     path("manage/duplicates/", views.duplicates, name="duplicates"),
     path("manage/merge/", views.merge_view, name="merge"),
     path("manage/audit/", views.audit_list, name="audit"),
+    path("manage/settings/", views.site_settings, name="site_settings"),
 
     # Өөрийн засварын батламж
     path("manage/person-edits/", views.person_edit_request_list,

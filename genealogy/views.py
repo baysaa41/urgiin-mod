@@ -42,6 +42,7 @@ from .forms import (
     PersonForm,
     PlaceForm,
     QuickAddPersonForm,
+    SiteSettingsForm,
     SourceForm,
 )
 from .models import (
@@ -55,6 +56,7 @@ from .models import (
     PersonEditRequest,
     PersonName,
     Place,
+    SiteSettings,
     Source,
 )
 
@@ -662,28 +664,77 @@ def tree_view(request, pk=None):
     if root is None:
         messages.info(request, "Эхлээд хүн бүртгэнэ үү.")
         return redirect("genealogy:home")
+    config = SiteSettings.load()
     mode = request.GET.get("mode", DEFAULT_TREE_MODE)
-    depth = min(int(request.GET.get("depth", 4) or 4), 10)
+    depth = _tree_depth(request, config)
     bloodline = request.GET.get("bloodline") == "1"
     return render(request, "genealogy/tree.html",
                   {"root": root, "mode": mode, "depth": depth, "bloodline": bloodline,
+                   # Слайдерын дээд хязгаар — админы тохиргооноос.
+                   "max_depth": config.max_tree_depth,
                    # «Хувийн» хүн: модны толгойд нэр л харагдана.
                    "root_masked": root.is_masked_for(request.user),
                    # Гол хүнийг засах эрх (мөр тус бүрийн дүрмээр) — линк харуулах эсэх
                    "can_edit_root": root.can_edit_by(request.user)})
 
 
+def _tree_depth(request, config):
+    """Модны үе — параметрээс, эс бөгөөс админы тохиргооноос. Хязгаартай."""
+    try:
+        depth = int(request.GET.get("depth") or config.default_tree_depth)
+    except (TypeError, ValueError):
+        return config.default_tree_depth
+    return max(1, min(depth, config.max_tree_depth))
+
+
+def _viewer_tree_scope(user, config):
+    """Үзэгчийн модны хүрээ — `None` бол хязгааргүй.
+
+    Энгийн (глобал `can_edit`-гүй) хүн өөрөөсөө `viewer_tree_distance` алхам
+    доторх хүмүүсийг л харна. ГЭХДЭЭ **өөрийн өвөг дээдэс ба үр хүүхэд нь
+    үргэлж бүтнээр харагдана** — зайны хязгаар тэдэнд үйлчлэхгүй.
+
+    Холбогдсон хүнгүй үзэгчид хязгаар тавих «өөрөө» гэж байхгүй тул
+    хязгааргүй үлдээнэ (ийм хэрэглэгч аппаар үүсэхгүй — урилга нь заавал
+    хүнтэй холбогддог).
+    """
+    if getattr(user, "can_edit", False):
+        return None
+    distance = config.viewer_tree_distance
+    if not distance:
+        return None
+    me = Person.objects.alive().filter(linked_user_id=getattr(user, "pk", None)).first()
+    if me is None:
+        return None
+    allowed = set(services.people_within(me, distance))
+    allowed |= set(services.ancestors(me, max_depth=services.CYCLE_SEARCH_LIMIT))
+    allowed |= set(services.descendants(me, max_depth=services.CYCLE_SEARCH_LIMIT))
+    allowed.add(me.pk)
+    return frozenset(allowed)
+
+
+def _limit_graph(data, allowed):
+    """Графикийг зөвшөөрөгдсөн хүмүүсээр хязгаарлана (зангилаа ба холбоос)."""
+    nodes = [node for node in data["nodes"] if node["id"] in allowed]
+    kept = {node["id"] for node in nodes}
+    links = [link for link in data["links"]
+             if link["source"] in kept and link["target"] in kept]
+    return {**data, "nodes": nodes, "links": links, "limited": True}
+
+
 def tree_data(request, pk):
     person = visible_person_or_404(request, pk)
+    config = SiteSettings.load()
     mode = request.GET.get("mode", DEFAULT_TREE_MODE)
-    try:
-        depth = min(int(request.GET.get("depth", 4)), 10)
-    except (TypeError, ValueError):
-        depth = 4
     data = services.build_graph(
-        person, mode=mode, max_depth=depth, user=request.user,
+        person, mode=mode, max_depth=_tree_depth(request, config), user=request.user,
         bloodline_only=request.GET.get("bloodline") == "1",
     )
+    scope = _viewer_tree_scope(request.user, config)
+    if scope is not None:
+        # Гол хүн өөрөө үргэлж үлдэнэ — эс бөгөөс мод төвгүй болно (тэр
+        # хүний профайлыг үзэгч `visible_to`-гоор аль хэдийн харж чадна).
+        return JsonResponse(_limit_graph(data, scope | {person.pk}))
     return JsonResponse(data)
 
 
@@ -1246,6 +1297,34 @@ def audit_list(request):
                     | ~Q(content_type=person_ct))
             .order_by("-created_at")[:200])
     return render(request, "genealogy/audit.html", {"logs": logs})
+
+
+# ---------------------------------------------------------------------------
+# Сайтын тохиргоо
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def site_settings(request):
+    """Сайтын хэмжээний тохиргоо — зөвхөн админ.
+
+    Нэг л мөр (`SiteSettings.load()`); мөр байхгүй бол анхдагч утгатай
+    объект дээр эхэлж, эхний хадгалалтад үүснэ.
+    """
+    if not getattr(request.user, "is_admin", False):
+        messages.error(request, "Зөвхөн админ тохиргоог засна.")
+        return redirect("genealogy:home")
+
+    config = SiteSettings.load()
+    if request.method == "POST":
+        form = SiteSettingsForm(request.POST, instance=config)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Тохиргоо хадгалагдлаа.")
+            return redirect("genealogy:site_settings")
+    else:
+        form = SiteSettingsForm(instance=config)
+    return render(request, "genealogy/settings_form.html", {"form": form})
 
 
 # ---------------------------------------------------------------------------

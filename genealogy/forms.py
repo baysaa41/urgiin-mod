@@ -9,7 +9,7 @@ from datetime import date
 from django import forms
 
 from .models import (ChildLink, Event, Family, FlexDate, Media, Person, PersonName,
-                     Place, Source)
+                     Place, SiteSettings, Source)
 
 
 def pedigree_choices():
@@ -282,6 +282,13 @@ class PersonForm(BootstrapFormMixin, forms.ModelForm):
 
 
 class FamilyForm(BootstrapFormMixin, forms.ModelForm):
+    # «Салсан» чек — «Салсан огноо» талбар нь ЗӨВХӨН чагталсан үед харагдана
+    # (загварт `divorce_date` NULL байх нь «салаагүй» гэсэн утгатай тул
+    # тусдаа загварын талбар нэмэхгүй).
+    is_divorced = forms.BooleanField(
+        label="Салсан", required=False,
+        help_text="Чагталбал «Салсан огноо» талбар нээгдэнэ.")
+
     class Meta:
         model = Family
         fields = ["partner1", "partner2", "family_type",
@@ -294,6 +301,15 @@ class FamilyForm(BootstrapFormMixin, forms.ModelForm):
             ("marriage_date", "Гэрлэсэн огноо"),
             ("divorce_date", "Салсан огноо"),
         ])
+        # Хуучин бичлэг: огноо байвал чек чагтлагдсан байна.
+        if self.instance is not None and self.instance.pk:
+            self.fields["is_divorced"].initial = self.instance.divorce_date_id is not None
+        # Чек нь огнооны талбарын ӨМНӨ байрлана (огноо нь түүнийг чагтлах үед
+        # л харагдана). Загварын бус талбарыг `Meta.fields`-д жагсааж
+        # болохгүй тул дарааллыг энд тааруулна.
+        order = [name for name in self.fields if name != "is_divorced"]
+        order.insert(order.index("divorce_date"), "is_divorced")
+        self.fields = {name: self.fields[name] for name in order}
         # Зөвхөн засах эрхтэй хүмүүсийг сонголтод оруулна — эс бөгөөс засварлагч
         # бусдын хүнийг гэр бүлд холбож/сольж чадна. View нь тухайн гэр бүлийн
         # одоогийн partner-уудыг ч заавал editable байхаар шүүдэг тул одоогийн
@@ -308,7 +324,21 @@ class FamilyForm(BootstrapFormMixin, forms.ModelForm):
         p1, p2 = cleaned.get("partner1"), cleaned.get("partner2")
         if p1 and p2 and p1.pk == p2.pk:
             raise forms.ValidationError("Нэг хүн хоёр талд байж болохгүй.")
+        # «Салсан» гэж чагталсан бол огноо ЗААВАЛ — эс бөгөөс чек нь
+        # чимээгүй хаягдаж, хэрэглэгч «хадгалагдсан» гэж бодно.
+        if cleaned.get("is_divorced") and not cleaned.get("divorce_date"):
+            self.add_error("divorce_date", "Салсан огноог оруулна уу.")
         return cleaned
+
+    def save(self, commit=True):
+        family = super().save(commit=False)
+        # Чагтлаагүй бол огноог хадгалахгүй — талбар нь нуугдсан байдаг тул
+        # хуучин утга үлдэж болзошгүй.
+        if not self.cleaned_data.get("is_divorced"):
+            family.divorce_date = None
+        if commit:
+            family.save()
+        return family
 
 
 class EventForm(BootstrapFormMixin, forms.ModelForm):
@@ -345,6 +375,19 @@ class EventForm(BootstrapFormMixin, forms.ModelForm):
             EventParticipant.objects.create(event=event, person_id=person_id)
         for person_id in set(existing) - chosen:
             existing[person_id].delete()
+
+
+class SiteSettingsForm(BootstrapFormMixin, forms.ModelForm):
+    """Сайтын хэмжээний тохиргоо — зөвхөн админ (`/manage/settings/`).
+
+    Хязгаарын шалгалт нь загварын `SiteSettings.clean()`-д байна —
+    `ModelForm` түүнийг `_post_clean`-оор дуудна.
+    """
+
+    class Meta:
+        model = SiteSettings
+        fields = ["default_tree_depth", "max_tree_depth",
+                  "viewer_tree_distance", "living_years"]
 
 
 class SourceForm(BootstrapFormMixin, forms.ModelForm):

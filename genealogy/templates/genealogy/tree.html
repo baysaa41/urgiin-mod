@@ -38,7 +38,7 @@
                     data-mode="siblings">Ах дүүс</button>
         </div>
         <label class="small text-muted mb-0">Үе:
-            <input type="range" id="depth" min="1" max="9" value="{{ depth }}" class="form-range d-inline-block"
+            <input type="range" id="depth" min="1" max="{{ max_depth }}" value="{{ depth }}" class="form-range d-inline-block"
                    style="width:100px;vertical-align:middle">
             <span id="depth-val">{{ depth }}</span>
         </label>
@@ -82,6 +82,11 @@
     шугам нь өргөмөл / асран хүмүүжүүлсэн / хойд холбоог заана — «Зөвхөн цусан
     холбоо» гэсэн сонголтоор нууж болно.
     {% if user.can_edit %}<span id="tree-hint">Зангилаа дээр хулганаа аваачиж «+» дарж хамаатан нэмнэ.</span>{% endif %}
+</p>
+{# Үзэгчийн зайны хязгаар (`SiteSettings.viewer_tree_distance`) — JS асаана #}
+<p class="text-muted small mt-1 no-print d-none" id="tree-limited">
+    Таны харж болох хүрээ хязгаарлагдмал: ойрын хамаатан, мөн өөрийн өвөг
+    дээдэс ба үр хүүхэд харагдана.
 </p>
 {% endblock %}
 
@@ -133,6 +138,9 @@ function centerOnRoot(animate = true) {
 
 function draw(data) {
   g.selectAll("*").remove();
+
+  // Үзэгчийн зайны хязгаар идэвхтэй эсэх (backend-ээс `limited`).
+  document.getElementById("tree-limited").classList.toggle("d-none", !data.limited);
 
   const nodes = data.nodes.map(d => Object.assign({}, d));
   const byId = new Map(nodes.map(d => [d.id, d]));
