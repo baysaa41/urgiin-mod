@@ -22,6 +22,7 @@
                 <li class="nav-item"><a class="nav-link" href="{% url 'genealogy:home' %}">Нүүр</a></li>
                 <li class="nav-item"><a class="nav-link" href="{% url 'genealogy:tree' %}">Мод</a></li>
                 <li class="nav-item"><a class="nav-link" href="{% url 'genealogy:source_list' %}">Эх сурвалж</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'genealogy:help' %}">Заавар</a></li>
                 {% if user.can_edit %}
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">Удирдах</a>
@@ -68,8 +69,13 @@
             {# Хэрэглэгчийн цэс: нэр, эрх, өөрийн холбоосууд, гарах — нэг дор #}
             <ul class="navbar-nav">
                 <li class="nav-item dropdown">
+                    {% comment %}
+                        Холбогдсон хүн байвал цэсэн дээр ТҮҮНИЙ нэрийг харуулна —
+                        модонд «хэн бэ» гэдэг нь бүртгэлийн имэйлээс ойлгомжтой.
+                        Холбоосгүй бол хэрэглэгчийн нэр/имэйл (`{{ user }}`).
+                    {% endcomment %}
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown"
-                       aria-expanded="false">👤 {{ user }}</a>
+                       aria-expanded="false">👤 {{ user.person.named_display|default:user }}</a>
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li class="px-3 py-1">
                             <div class="small text-body-secondary text-truncate">{{ user.email }}</div>

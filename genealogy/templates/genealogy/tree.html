@@ -228,13 +228,17 @@ function draw(data) {
     const g = d3.select(this);
     const lines = d.lines || [];
     const tidy = t => (t.length > 20 ? t.slice(0, 19) + "…" : t);
+    // Хэрэглэгчээс хэдэн алхмын зайд — нэрийн АРД «(3)» хэлбэрээр.
+    // Өөрөө (0) болон холбогдсон хүнгүй үед (`null`) хоосон. Товчилсны
+    // ДАРАА залгана — эс бөгөөс урт нэрэнд зай нь тасарна.
+    const suffix = d.distance > 0 ? ` (${d.distance})` : "";
     lines.forEach((line, i) => {
       g.append("text")
         .attr("x", 8)
         // Хосын хоёр мөр зангилааны дунд тэнцвэртэй байрлана.
         .attr("y", lines.length > 1 ? 24 + i * 18 : 17)
         .classed("deceased-line", !!line.deceased)
-        .text(tidy(line.text));
+        .text(tidy(line.text) + (i === lines.length - 1 ? suffix : ""));
     });
   });
   // Хосын зангилаанд нэмэлт мэдээлэл БАЙХГҮЙ — зөвхөн нэрс.

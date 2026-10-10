@@ -9,6 +9,7 @@ from datetime import timedelta
 from unittest import mock
 from uuid import UUID
 
+from django.conf import settings
 from django.core import mail
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
@@ -17,7 +18,11 @@ from django.utils import timezone
 
 from genealogy.models import ChildLink, Family, FlexDate, Person
 
-from .emails import send_edit_request_email, send_edit_resolved_email
+from .emails import (
+    send_edit_request_email,
+    send_edit_resolved_email,
+    send_invite_email,
+)
 from .models import EditRequest, Invite, User
 
 
@@ -678,3 +683,57 @@ class EditorInviteApprovalTests(AccountTestMixin, TestCase):
         response = self.client.get(reverse("accounts:invite_accept", args=[invite.token]))
         self.assertContains(response, "админы батламж")
         self.assertContains(response, "энгийн хүний (viewer)")
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class InviteEmailTests(AccountTestMixin, TestCase):
+    """Урилгын имэйл — нууц үгийн линк, нэвтрэх линк ба товч заавар."""
+
+    def setUp(self):
+        super().setUp()
+        mail.outbox.clear()
+
+    def _invite(self, **overrides):
+        data = {"email": "new@example.com", "role": User.Role.VIEWER,
+                "person": self.person, "invited_by": self.admin}
+        data.update(overrides)
+        return Invite.objects.create(
+            expires_at=timezone.now() + timedelta(days=7), **data)
+
+    def _send(self, invite):
+        send_invite_email(invite, "https://жишээ.мн/урилга")
+        return mail.outbox[0].body
+
+    def test_email_carries_the_accept_login_and_help_links(self):
+        body = self._send(self._invite())
+        self.assertIn("https://жишээ.мн/урилга", body)          # нууц үг тавих
+        self.assertIn(reverse("accounts:login"), body)          # дараа нь нэвтрэх
+        self.assertIn(reverse("genealogy:help"), body)          # заавар
+
+    def test_email_names_the_linked_person_and_the_login_name(self):
+        body = self._send(self._invite())
+        self.assertIn(self.person.named_display, body)
+        self.assertIn("new@example.com", body)
+
+    def test_email_uses_the_site_url_as_the_base(self):
+        body = self._send(self._invite())
+        self.assertIn(settings.SITE_URL.rstrip("/"), body)
+
+    def test_email_explains_what_the_invitee_can_do(self):
+        body = self._send(self._invite())
+        self.assertIn("НУУЦ ҮГЭЭ ТАВИХ", body)
+        self.assertIn("ЗААВАР", body)
+
+    def test_pending_editor_invite_warns_about_the_approval(self):
+        body = self._send(self._invite(role=User.Role.EDITOR))
+        self.assertIn("админы батламж", body)
+
+    def test_approved_editor_invite_has_no_warning(self):
+        invite = self._invite(role=User.Role.EDITOR, approved_at=timezone.now(),
+                              approved_by=self.admin)
+        self.assertNotIn("админы батламж", self._send(invite))
+
+    def test_send_failure_is_swallowed(self):
+        with mock.patch("accounts.emails.send_mail", side_effect=Exception("SMTP")):
+            send_invite_email(self._invite(), "https://жишээ.мн/урилга")
+        self.assertEqual(mail.outbox, [])

@@ -32,6 +32,9 @@ urlpatterns = [
     path("tree/<uuid:pk>/", views.tree_view, name="tree_person"),
     path("tree/<uuid:pk>/data/", views.tree_data, name="tree_data"),
 
+    # Заавар
+    path("help/", views.help_page, name="help"),
+
     # Хайлт
     path("search/", views.search, name="search"),
     path("lookup/", views.person_lookup, name="person_lookup"),

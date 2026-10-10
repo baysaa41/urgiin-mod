@@ -2690,6 +2690,46 @@ class PersonDetailDisplayTests(TreeBuilderMixin, TestCase):
         response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
         self.assertContains(response, "Хүйс: Эрэгтэй")
 
+    # --- толгой хэсгийн дараалал --------------------------------------------
+    def test_header_order_is_clan_sex_then_birth(self):
+        """Дараалал: нэр → ургийн овог, хүйс → төрсөн он."""
+        Person.objects.filter(pk=self.child.pk).update(clan_name="Санга",
+                                                       sex=Person.Sex.MALE)
+        self.child.refresh_from_db()
+        self.child.birth_date = FlexDate.create_from_text("1977-04-01")
+        self.child.save()
+
+        body = self.client.get(
+            reverse("genealogy:person_detail", args=[self.child.pk])).content.decode()
+        self.assertLess(body.index("Ургийн овог: Санга"), body.index("Хүйс: Эрэгтэй"))
+        self.assertLess(body.index("Хүйс: Эрэгтэй"), body.index("Төрсөн:"))
+
+    def test_living_person_has_no_death_row(self):
+        """«Нас барсан» мөр нь зөвхөн нас барсан хүнд."""
+        self.child.birth_date = FlexDate.create_from_text("1977")
+        self.child.save()
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertContains(response, "Төрсөн:")
+        self.assertNotContains(response, "Нас барсан:")
+
+    def test_deceased_person_shows_the_death_row(self):
+        Person.objects.filter(pk=self.child.pk).update(
+            living_override=False, death_date=FlexDate.create_from_text("2007"))
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertContains(response, "Нас барсан:")
+        self.assertContains(response, "2007")
+
+    def test_lifespan_summary_line_is_gone(self):
+        """`lifespan` («1950–2007») нь он жилүүдтэй давхарддаг тул толгойд алга."""
+        person = Person.objects.create(
+            given_name="ТестОн",
+            birth_date=FlexDate.create_from_text("1950"),
+            death_date=FlexDate.create_from_text("2007"))
+        response = self.client.get(reverse("genealogy:person_detail", args=[person.pk]))
+        self.assertContains(response, "1950")
+        self.assertContains(response, "2007")
+        self.assertNotContains(response, "1950–2007")
+
 
 class FlexDateReuseTests(TreeBuilderMixin, TestCase):
     """Форм бөглөх бүрт шинэ FlexDate мөр үүсэхээс сэргийлнэ."""
@@ -2832,6 +2872,7 @@ class LoginRequiredPolicyTests(TreeBuilderMixin, TestCase):
             reverse("genealogy:person_create"),
             reverse("genealogy:person_edit", args=[self.child.pk]),
             reverse("genealogy:person_delete", args=[self.child.pk]),
+            reverse("genealogy:help"),
             reverse("genealogy:tree"),
             reverse("genealogy:tree_person", args=[self.child.pk]),
             reverse("genealogy:tree_data", args=[self.child.pk]),
@@ -3189,6 +3230,18 @@ class UserMenuTests(TreeBuilderMixin, TestCase):
         self.assertIn("Засварлагч", html)
         self.assertIn(reverse("accounts:logout"), html)
         self.assertNotIn("Миний профайл", html)
+
+    def test_menu_shows_the_linked_persons_name(self):
+        """Цэсэн дээр холбогдсон хүний нэр харагдана (бүртгэлийн имэйл биш)."""
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.user)
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("genealogy:home")).content.decode()
+        self.assertIn(f"👤 {self.child.named_display}", html)
+
+    def test_menu_falls_back_to_the_user_when_unlinked(self):
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("genealogy:home")).content.decode()
+        self.assertIn("👤 menu@example.com", html)
 
     def test_menu_links_to_own_person_and_tree(self):
         Person.objects.filter(pk=self.child.pk).update(linked_user=self.user)
@@ -4562,6 +4615,15 @@ class ProfileDistanceTests(TreeBuilderMixin, TestCase):
         self.assertNotContains(response, "алхмын зайд")
         self.assertNotContains(response, "Энэ бол та өөрөө")
 
+    def test_distance_line_comes_after_the_dates(self):
+        """Зай нь он жилүүдийн ДАРАА харагдана."""
+        # `.update()` — `self.child.save()` нь хуучин instance-аас бүх мөрийг
+        # дарж бичиж, `.update()`-ээр тавьсан `linked_user`-ыг арилгана.
+        Person.objects.filter(pk=self.child.pk).update(
+            birth_date=FlexDate.create_from_text("1985"))
+        body = self._page(self.child).content.decode()
+        self.assertLess(body.index("Төрсөн:"), body.index("Энэ бол та өөрөө"))
+
     def test_editor_also_sees_the_distance(self):
         self.client.force_login(self.editor_user())
         self.assertContains(self._page(self.father), "Танаас 1 алхмын зайд")
@@ -4578,3 +4640,94 @@ class ProfileDistanceTests(TreeBuilderMixin, TestCase):
 
     def test_distance_between_self_is_zero(self):
         self.assertEqual(distance_between(self.child, self.child, 5), 0)
+
+
+class TreeDistanceLabelTests(TreeBuilderMixin, TestCase):
+    """Модны ЗӨВХӨН гол хүний зайг бодож харуулна.
+
+    Зангилаа бүрд зай бодох нь түвшин бүрд 2 query зарцуулж үнэтэй тул
+    зөвхөн модны төв хүн хүртэлх замыг хайна.
+    """
+
+    def setUp(self):
+        self.build_family()
+        self.viewer = User.objects.create_user(email="tdl@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.viewer)
+        self.client.force_login(self.viewer)
+
+    def _nodes(self, person, mode="ancestors"):
+        url = reverse("genealogy:tree_data", args=[person.pk]) + f"?mode={mode}"
+        return {node["name"]: node["distance"]
+                for node in self.client.get(url).json()["nodes"]}
+
+    def test_only_the_root_carries_a_distance(self):
+        nodes = self._nodes(self.father, mode="both")
+        self.assertTrue(nodes)
+        self.assertEqual(nodes[self.father.display_name], 1)     # хэрэглэгчээс 1 алхам
+        others = {name: value for name, value in nodes.items()
+                  if name != self.father.display_name}
+        self.assertTrue(others, "бусад зангилаа байх ёстой")
+        self.assertTrue(all(value is None for value in others.values()),
+                        f"зөвхөн гол хүн зайтай байх ёстой: {others}")
+
+    def test_own_record_root_is_zero(self):
+        nodes = self._nodes(self.child)
+        self.assertEqual(nodes[self.child.display_name], 0)
+
+    def test_user_without_a_linked_person_has_no_distances(self):
+        """Холбогдсон хүнгүй бол зайг бодох «өөрөө» гэж байхгүй."""
+        stranger = User.objects.create_user(email="tdl-stranger@example.com", password="x")
+        self.client.force_login(stranger)
+        nodes = self._nodes(self.father)
+        self.assertTrue(nodes)
+        self.assertTrue(all(value is None for value in nodes.values()))
+
+
+class HelpPageTests(TreeBuilderMixin, TestCase):
+    """Зааварын хуудас — бүх нэвтэрсэн гишүүнд, эрхээс үл хамааран."""
+
+    def setUp(self):
+        self.build_family()
+        self.viewer = User.objects.create_user(email="help-v@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.editor = User.objects.create_user(email="help-e@example.com", password="x",
+                                               role=User.Role.EDITOR)
+
+    def _page(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse("genealogy:help"))
+
+    def test_viewer_can_open_it(self):
+        self.assertEqual(self._page(self.viewer).status_code, 200)
+
+    def test_it_explains_the_three_roles(self):
+        response = self._page(self.viewer)
+        for role in ("Үзэгч", "Засварлагч", "Админ"):
+            self.assertContains(response, role)
+
+    def test_it_explains_the_approval_flow(self):
+        self.assertContains(self._page(self.viewer), "батлагдаагүй")
+
+    def test_it_explains_every_tree_mode(self):
+        response = self._page(self.editor)
+        for mode in ("Нэгдсэн", "Өвөг дээдэс", "Үр хойчис", "Ах дүүс"):
+            self.assertContains(response, mode)
+
+    def test_it_explains_the_date_formats(self):
+        response = self._page(self.viewer)
+        self.assertContains(response, "ойролцоогоор 1920")
+        self.assertContains(response, "1919/1920")
+
+    def test_it_explains_the_visibility_levels(self):
+        response = self._page(self.viewer)
+        for level in ("Автоматаар", "Нээлтэй", "Гэр бүл", "Хувийн", "Хаалттай"):
+            self.assertContains(response, level)
+
+    def test_viewer_is_pointed_to_the_editor_request(self):
+        self.assertContains(self._page(self.viewer),
+                            reverse("accounts:editor_request"))
+
+    def test_editor_is_not_pointed_to_the_editor_request(self):
+        self.assertNotContains(self._page(self.editor),
+                               reverse("accounts:editor_request"))

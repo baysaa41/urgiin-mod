@@ -172,9 +172,9 @@ def _person_or_404(queryset, value):
     return get_object_or_404(queryset, pk=pk)
 
 
-# Профайл дээр зайг харуулах дээд хязгаар — BFS нь түвшин бүрд 2 query
-# хийдэг тул хязгааргүй тойрохгүй. Хэт хол хүнд «N-ээс хол» гэж бичнэ.
-PROFILE_DISTANCE_LIMIT = 10
+# Зайг хайх дээд хязгаар — BFS нь түвшин бүрд 2 query хийдэг тул хязгааргүй
+# тойрохгүй. Профайлд хэтэрвэл «N-ээс хол» гэж бичнэ, модонд тоо гарахгүй.
+DISTANCE_LIMIT = 10
 
 
 def _distance_from_viewer(request, person):
@@ -190,9 +190,9 @@ def _distance_from_viewer(request, person):
         return None
     if me.pk == person.pk:
         return "Энэ бол та өөрөө"
-    distance = services.distance_between(me, person, PROFILE_DISTANCE_LIMIT)
+    distance = services.distance_between(me, person, DISTANCE_LIMIT)
     if distance is None:
-        return f"Танаас {PROFILE_DISTANCE_LIMIT}-оос хол"
+        return f"Танаас {DISTANCE_LIMIT}-оос хол"
     return f"Танаас {distance} алхмын зайд"
 
 
@@ -757,16 +757,32 @@ def tree_data(request, pk):
         bloodline_only=request.GET.get("bloodline") == "1",
     )
     scope = _viewer_tree_scope(request.user, config)
-    if scope is not None:
-        # «Зай доторх хүний бүтэн мод» асаалттай бол зай дотор багтсан хүний
-        # мод ОГТ тайрагдахгүй. (Өвөг дээдэс ба үр хүүхэд нь зайд үл хамааран
-        # `scope`-д багтдаг тул тэдний мод ч бүтэн харагдана.)
-        if config.full_tree_within_distance and person.pk in scope:
-            return JsonResponse(data)
+    # «Зай доторх хүний бүтэн мод» асаалттай бол зай дотор багтсан хүний мод
+    # ОГТ тайрагдахгүй. (Өвөг дээдэс ба үр хүүхэд нь зайд үл хамааран
+    # `scope`-д багтдаг тул тэдний мод ч бүтэн харагдана.)
+    if scope is not None and not (config.full_tree_within_distance
+                                  and person.pk in scope):
         # Гол хүн өөрөө үргэлж үлдэнэ — эс бөгөөс мод төвгүй болно (тэр
         # хүний профайлыг үзэгч `visible_to`-гоор аль хэдийн харж чадна).
-        return JsonResponse(_limit_graph(data, scope | {person.pk}))
-    return JsonResponse(data)
+        data = _limit_graph(data, scope | {person.pk})
+    return JsonResponse(_with_root_distance(data, person, request.user))
+
+
+def _with_root_distance(data, root, user):
+    """ЗӨВХӨН модны гол хүний зайг нэмнэ (зангилаа бүрийнх биш).
+
+    Зангилаа бүрд зай бодох нь түвшин бүрд 2 query зарцуулж, том модонд
+    үнэтэй байдаг — гол хүн хүртэлх зам нь олдмогцоо зогсдог
+    (`services.distance_between`). Бусад зангилаанд талбар нь `None`
+    хэвээр байна (схем тогтвортой).
+    """
+    me = Person.objects.alive().filter(
+        linked_user_id=getattr(user, "pk", None)).first()
+    distance = (services.distance_between(me, root, DISTANCE_LIMIT)
+                if me is not None else None)
+    for node in data["nodes"]:
+        node["distance"] = distance if node["root"] else None
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -1328,6 +1344,21 @@ def audit_list(request):
                     | ~Q(content_type=person_ct))
             .order_by("-created_at")[:200])
     return render(request, "genealogy/audit.html", {"logs": logs})
+
+
+# ---------------------------------------------------------------------------
+# Заавар
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def help_page(request):
+    """Хэрэглэгчид зориулсан заавар — эрх, мод, нууцлал, бүртгэл.
+
+    Агуулга нь бүхэлдээ статик (template дотор) — эрхээс хамаарч хэсэг
+    нуухгүй: гишүүн бүр юу хийж болох, юу хийж болохгүйг мэдэх ёстой.
+    """
+    return render(request, "genealogy/help.html")
 
 
 # ---------------------------------------------------------------------------
