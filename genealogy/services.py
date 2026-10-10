@@ -191,6 +191,29 @@ _REL_UP = {
 _UP_MODES = {"ancestors", "up"}
 
 
+def sibling_relation_label(person, relative, generation, sex):
+    """«Ах дүүс» горимын хамаатан — эцэг эхийн үр хойчсын үеээр.
+
+    `generation`: 0 = ах дүүс (эцэг эхийн хүүхдүүд), 1 = тэдний хүүхэд, …
+    Дараагийн үеүүд нь `direct_relation_label`-ийн үр хойшсын нэрсийг
+    ашиглана («хүү/охин», «ач/зээ», …) — модны мөр бүр өөрийн дээд мөртэйгөө
+    харьцааг харуулна.
+
+    Ах/эгч/дүү нь ТӨРСӨН ОНООР тодорхойлогдоно: ахмад нь «ах»/«эгч», бага нь
+    «дүү» — монголд «дүү» хоёр хүйстэд ижил хэрэглэгддэг тул хүйсээр
+    ялгахгүй. Огноо нь тодорхойгүй бол ерөнхий «ах/эгч/дүү» гэж бичнэ.
+    """
+    if generation > 0:
+        return direct_relation_label(generation, sex, "descendants")
+    mine = person.birth_date.year if person.birth_date else None
+    theirs = relative.birth_date.year if relative.birth_date else None
+    if mine is None or theirs is None or mine == theirs:
+        return "ах/эгч/дүү"
+    if theirs < mine:
+        return {"M": "ах", "F": "эгч"}.get(sex, "ах/эгч")
+    return "дүү"
+
+
 def direct_relation_label(depth, sex, mode):
     """Модны зангилааны нэрний дараа хаалтанд бичих хамаатан; root бол None.
 
@@ -298,9 +321,11 @@ def sibling_parent_candidates(person):
 def _parent_candidate_score(child, candidate, role):
     """Кандидат тухайн үүрд хэр тохирохыг оноогоор илэрхийлнэ.
 
-    Зөвхөн хүйс таарснаар санал болгохгүй: нэр (эцгийн нэр / овог), эсвэл
-    боломжит он жилийн дохио ЗААВАЛ байх ёстой. Эс бөгөөс огноогүй, эцгийн
-    нэргүй хүмүүст бүх эрэгтэй/эмэгтэй санал болж, жагсаалт утгагүй болно.
+    НЭРИЙН дохио (эцгийн нэр / овог / surname) ЗААВАЛ байх ёстой — зөвхөн
+    хүйс таарч, нас нь боломжит завсарт багтсанаар санал болгохгүй. Эс
+    бөгөөс нэр нь огт хамаагүй олон хүн (нэг үеийн бүх эрэгтэй/эмэгтэй)
+    жагсаалтыг дүүргэж, санал утгагүй болно. Насны зөрүү нь зөвхөн НЭМЭЛТ
+    оноо — бие даасан дохио биш.
     """
     child_year = child.birth_date.year if child.birth_date else None
     cand_year = candidate.birth_date.year if candidate.birth_date else None
@@ -326,11 +351,10 @@ def _parent_candidate_score(child, candidate, role):
         score += _SCORE_SEX_MATCH if candidate.sex == wanted else _SCORE_SEX_MISMATCH
     if child_year is not None and cand_year is not None:
         gap = child_year - cand_year
-        if _PARENT_MIN_GAP <= gap <= _PARENT_MAX_GAP:
-            score += _SCORE_DATE_OK
-            has_signal = True
-        else:
-            score += _SCORE_DATE_BAD
+        # `has_signal` ЭНД тавихгүй — насны зөрүү нь бие даасан дохио биш,
+        # зөвхөн нэрийн дохиог дэмжих нэмэлт оноо.
+        score += _SCORE_DATE_OK if _PARENT_MIN_GAP <= gap <= _PARENT_MAX_GAP \
+            else _SCORE_DATE_BAD
     return score if has_signal else 0
 
 
@@ -608,6 +632,56 @@ def client_ip(request):
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
+
+
+# ---------------------------------------------------------------------------
+# Нээлттэй бичлэгийн эзэмшил
+# ---------------------------------------------------------------------------
+
+
+def claim_open_person(person, user):
+    """«Бүх засварлагч засах боломжтой» бичлэгийг засварлагчийн нэр дээр шилжүүлнэ.
+
+    `is_open_for_edit` нь хэн ч хүрээгүй бичлэгүүдийн НЭЭЛТТЭЙ САН: editor
+    засварламагц бичлэг нь хаагдаж, тэр editor эзэн болно — цаашид зөвхөн тэр
+    хүн, админ, ба өөрийн удамынхан нь засна. Ингэснээр хоёр editor нэг
+    бичлэг дээр зөрчилдөхгүй.
+
+    `created_by` нь аль хэдийн «энэ бичлэгийг засах эрхтэй хүн» гэсэн утгатай
+    (`can_edit_by`) тул шинэ талбар нэмэхгүй — зөвхөн шилжүүлж бичнэ.
+
+    **Админ эзэмшихгүй.** Тэр бүх бичлэгийг засах эрхтэй тул эзэмшил
+    шаардлагагүй; харин өмнө нь editor эзэмшсэн бичлэгийг булааж авахгүй —
+    бичлэг нь хаагдана, эзэн нь хэвээр үлдэнэ.
+
+    Зөвхөн ГЛОБАЛ `can_edit` хэрэглэгч эзэмшинэ: холбогдсон үзэгчийн засвар
+    батлуулахаар хүлээгддэг (`PersonEditRequest`) тул эзэмшил үүсгэхгүй.
+
+    `user` нь ЖИНХЭНЭ `User` байх ёстой — «энгийн харагдац»-ын бүрхүүлийг
+    дамжуулбал FK бичихэд `ValueError` шидэнэ (`accounts.middleware.real_user`).
+    """
+    if person is None or user is None:
+        return False
+    if not getattr(person, "is_open_for_edit", False):
+        return False
+    if not getattr(user, "can_edit", False):
+        return False
+    person.is_open_for_edit = False
+    fields = ["is_open_for_edit"]
+    if not getattr(user, "is_admin", False):
+        person.created_by = user
+        fields.append("created_by")
+    person.save(update_fields=fields)
+    return True
+
+
+def claim_open_members(family, user):
+    """Гэр бүлийн оролцогч БҮРИЙГ (partner ба хүүхэд) эзэмшинэ.
+
+    Гэр бүл засах нь хэд хэдэн хүний холбоог хөнддөг тул аль нь нээлттэй
+    байсан ч эзэмшигдэнэ.
+    """
+    return [person for person in family.members if claim_open_person(person, user)]
 
 
 # ---------------------------------------------------------------------------
@@ -1160,6 +1234,9 @@ class HiddenPerson:
 def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only=False):
     """D3-д зориулсан {nodes, links} буцаана.
 
+    Горимууд: `ancestors` (өвөг дээшээ), `descendants` (үр хойш), `both`
+    (хоёулаа), `siblings` (эцэг эхээс доош — ах дүүс ба тэдний үр хойчис).
+
     Давхардсан хүнийг НЭГ л удаа оруулна (DAG) — layout дээр давхар зангилаа
     үүсэхгүй. Ирмэг бүр `pedigree`-тэй тул фронт дээр өргөмөл холбоог
     тасархай шугамаар ялгаж зурна.
@@ -1170,6 +1247,41 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
     # Салаа: "up" = өвөг дээшээ, "down" = үр хойш. Root нь "root".
     # (Нэг хүн хоёуланд ч багтахгүй — цикл хориотой тул.)
     branch = {root.pk: "root"}
+    # «Ах дүүс» горимд үеийг тусад нь хөтөлнө: 0 = ах дүүс (эцэг эхийн
+    # хүүхдүүд), 1 = тэдний хүүхэд, …; эцэг эх нь `branch="up"` тул энд орохгүй.
+    sibling_gen = {}
+    # Хосын зангилаа: `{зангилааны id: [эцэг, эх]}`. Хос нь НЭГ зангилаагаар
+    # харагдана — id нь харагдах эцэг/эхийн нэг нь байх тул зангилаа дарах,
+    # «+» товч, холбоос бүгд өөрчлөлтгүй ажиллана.
+    couple_members = {}
+    # `{эцэг/эхийн pk: хосын зангилааны id}` — холбоос тавихдаа хоёр дахь
+    # эцэг/эхийг ч хосын зангилаа руу буулгана (эс бөгөөс түүний өөр гэрлэлтийн
+    # хүүхэд холбоогүй хөвж үлдэнэ).
+    parent_alias = {}
+    if mode == "siblings":
+        # Эцэг эхээс ДООШ салбарлана. Эцэг эх БҮРИЙН бүх үр хойчсыг нэгтгэнэ —
+        # ингэснээр зөвхөн нэг эцэг/эх нь нэгтэй хагас ах дүү ч хамрагдана
+        # (хүний профайл дээрх ах дүүгийн жагсаалттай ижил дүрэм).
+        parents = root.parents
+        if parents:
+            # Хосын зангилааны id нь ХАРАГДАХ эцэг/эхийн нэг байх ёстой — эс
+            # бөгөөс «Хаалттай» эцэг/эхийн оронд «•••» зангилаа үүсээд,
+            # харагдаж буй нөгөө эцэг/эх модноос алга болно.
+            visible_parents = [p for p in parents if p.can_view(user)]
+            primary = (visible_parents or parents)[0]
+            paths[primary.pk] = [root.pk, primary.pk]
+            branch[primary.pk] = "up"
+            couple_members[primary.pk] = parents
+            for parent in parents:
+                parent_alias[parent.pk] = primary.pk
+                for pid, path in descendant_paths(
+                        parent, max_depth, bloodline_only=bloodline_only).items():
+                    # Хамгийн ойрын зам нь үлдэнэ (бүтэн ах дүү хоёр эцэг
+                    # эхээс ирнэ — аль нь түрүүлж бодогдсоноос хамаарахгүй).
+                    paths.setdefault(pid, [root.pk] + path)
+                    branch.setdefault(pid, "down")
+                    generation = len(path) - 2      # эцэг эхээс хойшхи үе
+                    sibling_gen[pid] = min(sibling_gen.get(pid, generation), generation)
     if mode in ("ancestors", "both"):
         for pid, path in ancestor_paths(root, max_depth, bloodline_only=bloodline_only).items():
             paths[pid] = path
@@ -1181,17 +1293,39 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
     depths = {pid: len(path) - 1 for pid, path in paths.items()}
     # Мөр: өвөг дээшээ сөрөг, үр хойш эерэг — `both` горимд хоёулаа
     # нэг зурган дээр давхцахгүй (root төвд).
-    rows = {pid: (-d if branch[pid] == "up" else d) for pid, d in depths.items()}
+    if mode == "siblings":
+        # Зам нь эцэг эхээр дамждаг тул `len(path) - 1` тохирохгүй: эцэг эх
+        # нь -1-д, ах дүүс нь root-той НЭГ мөрөнд (0), дараа нь үе бүр доош.
+        rows = {}
+        for pid in paths:
+            if branch[pid] == "up":
+                rows[pid] = -1
+            elif pid == root.pk:
+                rows[pid] = 0
+            else:
+                rows[pid] = sibling_gen.get(pid, 1)
+    else:
+        rows = {pid: (-d if branch[pid] == "up" else d) for pid, d in depths.items()}
 
     visible = Person.objects.visible_to(user).filter(pk__in=depths)
     people = {p.pk: p for p in visible.select_related("birth_date", "death_date")}
     # «Хувийн» хүн: нэр нь харагдана, харин нас/хүйс/хамаатан нь хаалттай.
     # (Модны JSON-оос огт явуулахгүй — эс бөгөөс endpoint-оос алдарна.)
     masked = {pid for pid, p in people.items() if p.is_masked_for(user)}
+    # Хосын хоёр дахь гишүүн нь ЗАНГИЛАА БОЛОХГҮЙ (хос нэг зангилаа) тул
+    # `people`-д орохгүй — нэр/насанд нь оруулахын тулд харагдах эсэхийг
+    # тусад нь шалгана. Зөвхөн «Ах дүүс» горимд, нэг л query.
+    couple_visible = set()
+    if parent_alias:
+        couple_visible = set(
+            Person.objects.visible_to(user)
+            .filter(pk__in=set(parent_alias)).values_list("pk", flat=True))
     # Хүйс тодорхойгүйг гэр бүлийн үүргээс нөхнө — мод, хамаатны шошго,
     # замын код бүгд үүнийг ашиглана (нэг query).
     sexes = effective_sex_map(people, masked)
-    path_codes = _path_codes(paths, people, branch, sexes, masked)
+    # «А/Э» замын код нь өвөг дээдсийн чиглэлд зориулагдсан — «Ах дүүс» горимд
+    # зам нь эцэг эхээр дамжин доош буудаг тул утгагүй холимог үсэг гарна.
+    path_codes = {} if mode == "siblings" else _path_codes(paths, people, branch, sexes, masked)
 
     # Мөрийн эрэмбэ (tidy layout) — фронт дээр биш, ЭНД бодогдоно.
     # Root-оос гадагшлах дарааллаар (|row| өсөхөд) мөр бүрийг эрэмбэлнэ: хүн
@@ -1220,14 +1354,54 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
         for i, pid in enumerate(members):
             order[pid] = i
 
+    def _relation_for(pid):
+        """Зангилааны хамаатан. «Ах дүүс» горимд үеээрээ тусад нь бодно."""
+        couple = couple_members.get(pid)
+        if couple:
+            # Хос нь нэг зангилаа тул хүйсээр ялгах боломжгүй.
+            return "эцэг эх" if len(couple) > 1 else direct_relation_label(
+                1, sexes[pid], "up")
+        if mode == "siblings" and pid != root.pk and branch[pid] != "up":
+            return sibling_relation_label(root, people[pid],
+                                          sibling_gen.get(pid, 1), sexes[pid])
+        # Эцэг эх (`branch="up"`, зам нь [root, эцэг эх] → depth 1) нь
+        # `direct_relation_label`-ээр «эцэг»/«эх» болно.
+        return direct_relation_label(depths[pid], sexes[pid], branch[pid])
+
     def _node(pid, p):
         """Модны нэг зангилаа.
 
         «Хувийн» хүний хувьд (`masked`) зөвхөн НЭРИЙГ явуулна — нас, хүйс,
         хамаатны шошго бүгд хаалттай. Эдгээрийг frontend дээр нуух нь
         хангалтгүй: JSON endpoint-оос шууд уншиж болно.
+
+        «Ах дүүс» горимд эцэг эхийн хос НЭГ зангилаа болно: нэр нь
+        хоёулангийнх нь, нас нь хамт. Аль нэг нь «Хувийн» бол бүхэл зангилаа
+        хаалттай — эс бөгөөс нөгөөгийнх нь он жилээр дамжин алдарна.
         """
+        couple = couple_members.get(pid)
         hide = pid in masked
+        name, called = p.display_name, p.called_name
+        lifespan, can_edit = p.lifespan, p.can_edit_by(user)
+        # Дэлгэц дээр мөр бүрээр НЭГ нэр: эцгийн нэр/овог нь зангилааны
+        # өргөнд багтахгүй тул зөвхөн өөрийн нэрийг (`short_name`) бичнэ.
+        # `name` нь бүтэн нэр хэвээр — tooltip ба JSON-ийг ашиглана.
+        lines = [{"text": p.short_name, "deceased": p.is_deceased}]
+        deceased = p.is_deceased
+        if couple:
+            members = [m for m in couple if m.pk in couple_visible]
+            name = " & ".join(m.display_name for m in members) or name
+            called = ""
+            lifespan = " · ".join(m.lifespan for m in members if m.lifespan)
+            hide = any(m.is_masked_for(user) for m in members) or hide
+            # Хосын хүүхдийг нэмэх/засах нь ХОЁР эцэг эхийг хөнддөг тул
+            # аль нэгийг нь засах эрхгүй бол «+» харуулахгүй.
+            can_edit = all(m.can_edit_by(user) for m in members)
+            # Хосын нэрс тус тусдаа мөрөнд; нас барсан нь мөрөөрөө саарал.
+            # Хосыг бүхэлд нь саарал болгох нь ЗӨВХӨН хоёул нас барсан үед.
+            lines = [{"text": m.short_name, "deceased": m.is_deceased}
+                     for m in members] or lines
+            deceased = bool(members) and all(m.is_deceased for m in members)
         return {
             "id": pid,
             "depth": depths[pid],
@@ -1235,28 +1409,33 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
             "row": rows[pid],
             # Тухайн мөр дэх байр — фронт зөвхөн үүгээр эрэмбэлнэ (дээрх блок).
             "order": order[pid],
-            "name": p.display_name,
-            "called_name": p.called_name,
-            "short": p.short_name,
-            "sex": sexes[pid],
+            "name": name,
+            "called_name": called,
+            "short": name,
+            # Зангилаа дээрх мөрүүд (хосын зангилаанд хоёр нэр тусдаа мөрөнд).
+            "lines": lines,
+            # Хос бол нэмэлт мэдээлэл (он жил, хамаатан) харуулахгүй.
+            "couple": bool(couple),
+            # Хос нь нэг хүн биш — хүйсээр будах нь төөрөгдүүлнэ.
+            "sex": "U" if couple else sexes[pid],
             "birth": None if hide else (p.birth_date.year if p.birth_date else None),
             # Эрэмбэлэх түлхүүр: нэг айлын хүүхдүүдийг төрсөн оноор эрэмбэлнэ.
             # Огноогүй нь 9999 — жагсаалтын төгсгөлд.
             "birth_sort": _birth_year(pid),
             "death": None if hide else (p.death_date.year if p.death_date else None),
-            "lifespan": "" if hide else p.lifespan,
+            "lifespan": "" if hide else lifespan,
             # Салаагаар нь (`branch`) — `both` горимд өвөг ба үр хойчис
             # хоёулаа нэг зурган дээр байдаг тул `mode` хангалтгүй.
             # «эцэг/эх» гэсэн шошго нь хүйсийг задруулдаг тул хаалттай үед алга.
-            "relation": None if hide else direct_relation_label(
-                depths[pid], sexes[pid], branch[pid]),
+            "relation": None if hide else _relation_for(pid),
             # «А/Э» замын код — зөвхөн өвөг дээдсийн горимд (доорх helper).
             "path_code": path_codes.get(pid),
             # Зангилааны "+" товчийг зөвхөн эрхтэй үед харуулна. Нэмэлт query
             # гарахгүй — created_by_id/is_open_for_edit нь мөр дээр байгаа.
-            "can_edit": p.can_edit_by(user),
+            "can_edit": can_edit,
             "living": p.is_living,
-            "deceased": p.is_deceased,
+            # Хосын зангилаа нь ЗӨВХӨН хоёул нас барсан үед «нас барсан».
+            "deceased": deceased,
             "root": pid == root.pk,
             "hidden": False,
             # Нарийн мэдээлэл нь хаалттай — фронт дээр ч тэмдэглэгдэнэ.
@@ -1281,6 +1460,7 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
             "id": pid, "depth": depths[pid], "branch": branch[pid], "row": rows[pid],
             "order": order[pid],
             "name": "•••", "called_name": "", "short": "•••", "sex": "U",
+            "lines": [{"text": "•••", "deceased": False}], "couple": False,
             "birth": None, "birth_sort": 9999, "death": None,
             "lifespan": "", "relation": None,
             "path_code": None, "can_edit": False, "living": False, "deceased": False,
@@ -1291,6 +1471,10 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
 
     links, seen = [], set()
     node_ids = set(depths)
+    # «Ах дүүс» горимд хоёр дахь эцэг/эх нь тусдаа зангилаа биш — хосын
+    # зангилаа руу буулгана. Ингэснээр түүний ӨӨР гэрлэлтийн хүүхэд ч
+    # холбоотой болж, холбоогүй хөвж үлдэхгүй.
+    node_id_of = {**{pid: pid for pid in node_ids}, **parent_alias}
 
     def add_link(src, dst, kind, pedigree=None):
         key = (src, dst, kind, pedigree)
@@ -1299,11 +1483,14 @@ def build_graph(root, mode="descendants", max_depth=4, user=None, bloodline_only
             links.append({"source": src, "target": dst, "type": kind, "pedigree": pedigree})
 
     families = Family.objects.filter(
-        models_q_family(depths)
+        models_q_family(node_id_of)
     ).prefetch_related("children")
 
     for family in families:
-        partners = [p.pk for p in family.partners if p.pk in node_ids]
+        # Хосын хоёр гишүүн НЭГ зангилаа болох тул давхардлыг арилгана —
+        # ингэснээр хос хоорондын `spouse` холбоос ч зурагдахгүй.
+        partners = list(dict.fromkeys(
+            node_id_of[p.pk] for p in family.partners if p.pk in node_id_of))
         for i in range(len(partners)):
             for j in range(i + 1, len(partners)):
                 add_link(partners[i], partners[j], "spouse")

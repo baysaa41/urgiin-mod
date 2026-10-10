@@ -6,7 +6,7 @@
 """
 
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.contrib import messages
@@ -249,6 +249,26 @@ def person_detail(request, pk):
     )
     masked_pks = {p.pk for p in relatives if p.is_masked_for(request.user)}
 
+    # Ах/эгч/дүү ба хүүхдүүдийг ӨНДӨР НАСТАЙГААС нь (төрсөн оноор өсөхөд)
+    # эрэмбэлнэ. Огноо нь тодорхойгүй (`FlexDate.sort_key == date.min`) болон
+    # нарийн мэдээлэл нь хаалттай хүмүүс төгсгөлдөө — «хаалттай хүний насыг
+    # эрэмбээр ч задруулахгүй» зарчим (`services.build_graph._birth_year`-тай
+    # ижил). `_place`-ээс ӨМНӨ ажиллана: тэр нь жинхэнэ объектыг placeholder
+    # болгодог тул `birth_date`/`pk` аль хэдийн ачаалагдсан байх ёстой.
+    def _age_key(p):
+        if p.pk in masked_pks or p.birth_date is None:
+            return (1, date.max, p.display_name)
+        sort_key = p.birth_date.sort_key
+        if sort_key in (None, date.min):
+            return (1, date.max, p.display_name)
+        return (0, sort_key, p.display_name)
+
+    for group in sibling_groups:
+        group["people"].sort(key=_age_key)
+    for entry in own_families:
+        for group in entry["child_groups"]:
+            group["people"].sort(key=_age_key)
+
     def _place(p):
         """Харах эрхгүй бол placeholder, эс бөгөөс хүн өөрөө.
 
@@ -425,6 +445,9 @@ class PersonUpdateView(PersonEditMixin, UpdateView):
         user = self.request.user
         # Editor/admin өөрийн бичлэгээ шууд засна — батламж шаардахгүй.
         privileged = bool(getattr(user, "can_edit", False))
+        # «Энгийн харагдац»-д `self.request.user` нь `User` биш бүрхүүл тул
+        # FK бичихдээ жинхэнэ хэрэглэгчийг авна.
+        actor = real_user(self.request)
 
         # АНХААР: `form.is_valid()` дотор `construct_instance` нь `self.object`-ыг
         # аль хэдийн шинэ утгаар дарсан байдаг тул хуучин утгыг ЗӨВХӨН сангаас
@@ -436,11 +459,13 @@ class PersonUpdateView(PersonEditMixin, UpdateView):
             ).get(pk=self.object.pk)
             old_values = services.person_snapshot(old)
 
+        # Нээлттэй байсан бичлэг нь засварлагчийн нэр дээр шилжинэ.
+        # `user`-ыг (бүрхүүлчлээгүй!) дамжуулна: «энгийн харагдац»-ын админ
+        # нь үзэгч мэтээр батлуулж байгаа тул эзэмших ёсгүй.
+        services.claim_open_person(self.object, user)
+
         response = super().form_valid(form)
 
-        # «Энгийн харагдац»-д `self.request.user` нь `User` биш бүрхүүл тул
-        # FK бичихдээ жинхэнэ хэрэглэгчийг авна.
-        actor = real_user(self.request)
         # Хуучирсан хүсэлт editor-ийн шинэ утгатай зөрчилдөхгүйн тулд
         # шууд засвар хийгдмэгц хүлээгдэж буй хүсэлтийг хаана.
         if privileged:
@@ -512,6 +537,9 @@ class FamilyUpdateView(CanEditMixin, UpdateView):
 
     def form_valid(self, form):
         response = super().form_valid(form)
+        # Гэр бүл засах нь оролцогч БҮРИЙН (partner ба хүүхэд) холбоог хөнддөг
+        # тул нээлттэй байсан оролцогчид эзэмшигдэнэ.
+        services.claim_open_members(self.object, self.request.user)
         services.log_action(self.request.user, AuditLog.Action.UPDATE, self.object, {},
                             ip_address=services.client_ip(self.request))
         messages.success(self.request, "Гэр бүлийн мэдээлэл хадгалагдлаа.")
@@ -601,6 +629,9 @@ def quick_add(request, pk, relation):
             except ValueError as exc:
                 form.add_error(None, str(exc))
             else:
+                # Хамаатан нэмэх нь anchor-ыг хөндсөн засвар тул нээлттэй
+                # байсан бол эзэмшигдэнэ.
+                services.claim_open_person(anchor, request.user)
                 response = render(request, "genealogy/partials/_quick_add_success.html",
                                   {"person": person, "anchor": anchor})
                 # D3 тал нь энэ event-ээр модоо шинэчилнэ.
@@ -902,6 +933,9 @@ def link_relative(request, pk, relation):
             except ValueError as exc:
                 form.add_error(None, str(exc))
             else:
+                # Холбох нь anchor-ыг хөндсөн засвар тул нээлттэй байсан бол
+                # эзэмшигдэнэ.
+                services.claim_open_person(anchor, request.user)
                 response = render(request, "genealogy/partials/_quick_add_success.html",
                                   {"person": linked, "anchor": anchor, "linked": True})
                 response["HX-Trigger"] = '{"tree:refresh": {"root": %d}}' % anchor.pk
@@ -1023,9 +1057,17 @@ def person_account_invite(request, pk):
         messages.error(request, "Эрх буруу байна.")
         return back
 
+    # Editor эрхийг зөвхөн админ ШУУД олгоно. Editor урилга илгээвэл урилга
+    # нь эхэндээ зөвхөн viewer эрх өгч, editor эрх нь админы батламж хүлээнэ
+    # (`Invite.needs_editor_approval`) — эс бөгөөс editor өөрөө editor
+    # үүсгэх, ө.х. эрхээ өргөжүүлэх зам нээгдэнэ.
+    auto_approved = role == User.Role.EDITOR and bool(
+        getattr(request.user, "is_admin", False))
     invite = Invite.objects.create(
         email=email, role=role, person=person, invited_by=request.user,
         expires_at=timezone.now() + timedelta(days=settings.INVITE_EXPIRY_DAYS),
+        approved_at=timezone.now() if auto_approved else None,
+        approved_by=request.user if auto_approved else None,
     )
     link = request.build_absolute_uri(
         reverse("accounts:invite_accept", args=[invite.token]))
@@ -1033,7 +1075,11 @@ def person_account_invite(request, pk):
     services.log_action(request.user, AuditLog.Action.UPDATE, person,
                         {"account_invite": email},
                         ip_address=services.client_ip(request))
-    messages.success(request, f"Урилга илгээгдлээ: {link}")
+    if invite.needs_editor_approval:
+        messages.success(request, f"Урилга илгээгдлээ: {link} — "
+                                  "Editor эрх нь админы батламж хүлээнэ.")
+    else:
+        messages.success(request, f"Урилга илгээгдлээ: {link}")
     return back
 
 

@@ -24,6 +24,16 @@
                     <span class="badge bg-success">Холбогдсон</span>
                     <strong>{{ account_user.email }}</strong>
                     <span class="text-muted small">· {{ account_user.get_role_display }}</span>
+                    {% comment %}
+                        Хэрэглэгчийн бүртгэл (имэйл, нууц үг, эрх) нь зөвхөн
+                        Django admin-аас засагдана. `can_manage_account` нь
+                        «энгийн харагдац»-ыг ч хаана — тиймээс линк зөвхөн
+                        жинхэнэ эрхтэй admin-д харагдана.
+                    {% endcomment %}
+                    {% if user.is_staff and can_manage_account %}
+                        <a class="btn btn-sm btn-outline-secondary ms-1"
+                           href="{% url 'admin:accounts_user_change' account_user.pk %}">Бүртгэл засах</a>
+                    {% endif %}
                 </p>
                 {% if can_manage_account %}
                     <form method="post" action="{% url 'genealogy:person_account_unlink' person.pk %}">
@@ -37,12 +47,19 @@
                 <p class="mb-2">
                     <span class="badge bg-warning text-dark">Урилга илгээсэн</span>
                     <strong>{{ pending_invite.email }}</strong>
-                    <span class="text-muted small">· {{ pending_invite.get_role_display }}
+                    <span class="text-muted small">· {{ pending_invite.role_label }}
                         · {{ pending_invite.expires_at|date:"Y-m-d" }} хүртэл</span>
                 </p>
-                <p class="text-muted small mb-0">
-                    Хүлээн авагч холбоосоор орж нууц үгээ тавихад энэ хүнтэй холбогдоно.
-                </p>
+                {% if pending_invite.needs_editor_approval %}
+                    <p class="text-muted small mb-0">
+                        Editor эрх нь <strong>админы батламж</strong> хүлээж байна —
+                        хүлээн авагч эхэндээ зөвхөн энгийн хүний эрхээр нэгдэнэ.
+                    </p>
+                {% else %}
+                    <p class="text-muted small mb-0">
+                        Хүлээн авагч холбоосоор орж нууц үгээ тавихад энэ хүнтэй холбогдоно.
+                    </p>
+                {% endif %}
 
             {% else %}
                 {# Холбоогүй #}

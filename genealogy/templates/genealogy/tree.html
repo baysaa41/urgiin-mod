@@ -2,7 +2,16 @@
 {% block title %}Мод — {{ root.named_display }}{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2 no-print">
+{% comment %}
+    Гарчигт гол хүний ОН ЖИЛ харагдахгүй — тэр нь модны зангилаа дээр аль
+    хэдийн бичигддэг. Энд зөвхөн нэр ба «Засах» товч.
+{% endcomment %}
+{% comment %}
+    Гарчиг ба удирдлагын мөр — ЗЭРЭГЦЭЭ биш, тус тусдаа мөрөнд. Өмнө нь
+    `justify-content-between` байсан тул өргөн дэлгэцэд удирдлага гарчгийн
+    хажууд шахагдаж, нарийн дэлгэцэд л (flex-wrap) доошоо буудаг байсан.
+{% endcomment %}
+<div class="mb-3 no-print">
     <div>
         <h4 class="mb-0">
             <span id="tree-root-name">{{ root.named_display }}</span>
@@ -16,9 +25,8 @@
                    id="tree-root-edit" href="#">Засах</a>
             {% endif %}
         </h4>
-        <div class="text-muted small" id="tree-root-life">{% if root_masked %}(хувийн){% else %}{{ root.lifespan }}{% endif %}</div>
     </div>
-    <div class="d-flex gap-2 align-items-center">
+    <div class="d-flex gap-2 align-items-center flex-wrap mt-2">
         <div class="btn-group btn-group-sm" role="group">
             <button class="btn btn-outline-primary {% if mode == 'both' %}active{% endif %}"
                     data-mode="both">Нэгдсэн</button>
@@ -26,6 +34,8 @@
                     data-mode="ancestors">Өвөг дээдэс</button>
             <button class="btn btn-outline-primary {% if mode == 'descendants' %}active{% endif %}"
                     data-mode="descendants">Үр хойчис</button>
+            <button class="btn btn-outline-primary {% if mode == 'siblings' %}active{% endif %}"
+                    data-mode="siblings">Ах дүүс</button>
         </div>
         <label class="small text-muted mb-0">Үе:
             <input type="range" id="depth" min="1" max="9" value="{{ depth }}" class="form-range d-inline-block"
@@ -203,17 +213,31 @@ function draw(data) {
       });
 
   node.append("rect").attr("width", NODE_W).attr("height", NODE_H);
-  // Нэр: авгайлдаг нэр байвал хаалтанд хамт — «Батбаясгалан (Батаа)».
-  node.append("text").attr("x", 8).attr("y", 17).text(d => {
-    const n = d.called_name ? `${d.name} (${d.called_name})` : d.name;
-    return n.length > 20 ? n.slice(0, 19) + "…" : n;
+  // Нэр(үүд): мөр бүрээр НЭГ нэр — эцгийн нэр/овог нь зангилаанд багтахгүй.
+  // Хосын зангилаанд хоёр нэр ТУС ТУСДАА мөрөнд; аль нэг нь нас барсан бол
+  // зөвхөн тэр мөр саарал (бүхэл зангилаа биш — CSS `.deceased-line`).
+  node.each(function (d) {
+    const g = d3.select(this);
+    const lines = d.lines || [];
+    const tidy = t => (t.length > 20 ? t.slice(0, 19) + "…" : t);
+    lines.forEach((line, i) => {
+      g.append("text")
+        .attr("x", 8)
+        // Хосын хоёр мөр зангилааны дунд тэнцвэртэй байрлана.
+        .attr("y", lines.length > 1 ? 24 + i * 18 : 17)
+        .classed("deceased-line", !!line.deceased)
+        .text(tidy(line.text));
+    });
   });
-  node.append("text").attr("class", "years").attr("x", 8).attr("y", 31)
+  // Хосын зангилаанд нэмэлт мэдээлэл БАЙХГҮЙ — зөвхөн нэрс.
+  node.filter(d => !d.couple).append("text").attr("class", "years")
+      .attr("x", 8).attr("y", 31)
       .text(d => d.hidden ? (d.closed ? "(хаалттай)" : "")
                           : (d.masked ? "(хувийн)" : d.lifespan));
   // Төвийн хүнтэй харьцах хамаатан ба «А/Э» замын код — хаалтанд.
   // Жишээ: (өвөг эцэг · АЭ) — «А» нь аавын тал, «Э» нь ээжийн тал.
-  node.append("text").attr("class", "relation").attr("x", 8).attr("y", 46)
+  node.filter(d => !d.couple).append("text").attr("class", "relation")
+      .attr("x", 8).attr("y", 46)
       .text(d => {
         const parts = [d.relation, d.path_code].filter(Boolean);
         return parts.length ? `(${parts.join(" · ")})` : "";
@@ -276,9 +300,8 @@ function pageUrl() {
 // хадогддог).
 function recenter(node) {
   ROOT_ID = node.id;
+  // Гарчигт зөвхөн нэр — он жил нь модны зангилаа дээр харагдана.
   document.getElementById("tree-root-name").textContent = node.name;
-  document.getElementById("tree-root-life").textContent =
-      node.masked ? "(хувийн)" : (node.lifespan || "");
   // «Засах» линк шинэ гол хүн рүү заана. Эрхгүй бол нууна (мөр тус бүрийн дүрэм).
   const edit = document.getElementById("tree-root-edit");
   if (edit) {

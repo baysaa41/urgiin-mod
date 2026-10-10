@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 def send_invite_email(invite, link):
     """Урилгын линкийг илгээнэ. Алдаа гарвал зөвхөн лог бичнэ — урсгалыг зогсоохгүй."""
+    # Батлагдаагүй editor урилга нь эхэндээ зөвхөн viewer эрх өгнө — хүлээн
+    # авагч гайхахгүйн тулд урьдчилан хэлнэ.
+    extra = ("\nТа эхэндээ энгийн хүний (viewer) эрхээр нэгдэнэ. Editor эрх нь "
+             "админы батламж шаардана — батлагдсаны дараа автоматаар нээгдэнэ.\n"
+             if invite.needs_editor_approval else "")
     try:
         send_mail(
             subject="Ургийн мод — урилга",
@@ -25,6 +30,7 @@ def send_invite_email(invite, link):
                 "Танд ургийн модны системд нэвтрэх урилга ирлээ.\n"
                 "Доорх холбоосоор орж нууц үгээ тавина уу "
                 f"({settings.INVITE_EXPIRY_DAYS} хоногийн дотор):\n\n{link}\n"
+                + extra
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[invite.email],

@@ -23,6 +23,9 @@
 .tree-node.masked rect { stroke-dasharray: 3 2; stroke: #b8a06a; fill: #fffdf3; }
 /* Нас барсан хүн — саарал (secondary) өнгөөр */
 .tree-node.deceased text { fill: #6c757d; }
+/* Хосын зангилаанд зөвхөн НАС БАРСАН гишүүний нэр саарал болно — хоёул
+   нас барсан үед л бүхэл зангилаа `.deceased` болно. */
+.tree-node text.deceased-line { fill: #6c757d; }
 .tree-node.deceased rect { stroke: #ced4da; fill: #f8f9fa; }
 .tree-node.deceased.root rect { fill: #fff8e1; }
 /* Нас барсан ч ХҮЙС нь ялгагдана: хүрээ нь хүйсийн өнгө (бүдэгрүүлсэн),

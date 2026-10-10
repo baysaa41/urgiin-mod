@@ -7,7 +7,14 @@
         <div class="card">
             <div class="card-body">
                 <h4 class="card-title mb-1">Тавтай морил</h4>
-                <p class="text-muted small">{{ invite.email }} · {{ invite.get_role_display }}</p>
+                <p class="text-muted small">{{ invite.email }} · {{ invite.role_label }}</p>
+                {% if invite.needs_editor_approval %}
+                    <div class="alert alert-info small mb-3">
+                        Та эхэндээ <strong>энгийн хүний (viewer)</strong> эрхээр
+                        нэгдэнэ. Editor эрх нь админы батламж шаардана —
+                        батлагдсаны дараа автоматаар нээгдэнэ.
+                    </div>
+                {% endif %}
                 <form method="post">
                     {% csrf_token %}
                     {% include "partials/_form_fields.html" %}

@@ -8,9 +8,14 @@
     эндээс чөлөөтэй хаяг руу урих боломжгүй. Хүлээн авагч холбоосоор орж нууц
     үгээ тавихад тухайн хүнтэй холбогдоно.
 </p>
+<p class="text-muted small">
+    <strong>Editor эрх нь админы батламж шаардана:</strong> editor урилга
+    илгээвэл хүлээн авагч эхэндээ зөвхөн энгийн хүний (viewer) эрхээр
+    нэгдэж, editor эрх нь доорх «Батлах» товчоор нээгдэнэ.
+</p>
 
-<table class="table table-sm">
-    <thead><tr><th>Имэйл</th><th>Хүн</th><th>Эрх</th><th>Үүссэн</th><th>Төлөв</th></tr></thead>
+<table class="table table-sm align-middle">
+    <thead><tr><th>Имэйл</th><th>Хүн</th><th>Эрх</th><th>Үүссэн</th><th>Төлөв</th><th></th></tr></thead>
     <tbody>
         {% for invite in invites %}
             <tr>
@@ -21,7 +26,14 @@
                             {{ invite.person.display_name }}</a>
                     {% else %}—{% endif %}
                 </td>
-                <td>{{ invite.get_role_display }}</td>
+                <td>
+                    {% if invite.needs_editor_approval %}
+                        <span class="badge bg-warning text-dark">Editor эрх хүлээгдэж байна</span>
+                        <div class="small text-muted">Одоогоор: энгийн хүн (viewer)</div>
+                    {% else %}
+                        {{ invite.role_label }}
+                    {% endif %}
+                </td>
                 <td>{{ invite.created_at|date:"Y-m-d" }}</td>
                 <td>
                     {% if invite.accepted_at %}
@@ -32,9 +44,23 @@
                         <span class="badge bg-secondary">Хугацаа дууссан</span>
                     {% endif %}
                 </td>
+                <td class="text-end">
+                    {% if invite.needs_editor_approval %}
+                        <form method="post" class="d-inline"
+                              action="{% url 'accounts:invite_decide' invite.pk 'approve' %}">
+                            {% csrf_token %}
+                            <button class="btn btn-sm btn-success">Батлах</button>
+                        </form>
+                        <form method="post" class="d-inline"
+                              action="{% url 'accounts:invite_decide' invite.pk 'reject' %}">
+                            {% csrf_token %}
+                            <button class="btn btn-sm btn-outline-secondary">Татгалзах</button>
+                        </form>
+                    {% endif %}
+                </td>
             </tr>
         {% empty %}
-            <tr><td colspan="5" class="text-muted">Урилга байхгүй.</td></tr>
+            <tr><td colspan="6" class="text-muted">Урилга байхгүй.</td></tr>
         {% endfor %}
     </tbody>
 </table>

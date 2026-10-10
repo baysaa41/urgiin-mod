@@ -905,6 +905,11 @@ class Family(models.Model):
     def partners(self):
         return [p for p in (self.partner1, self.partner2) if p]
 
+    @property
+    def members(self):
+        """Оролцогч БҮР — partner ба хүүхэд (`can_edit_by` ба эзэмшилд)."""
+        return list(self.partners) + [link.child for link in self.children.all()]
+
     def can_edit_by(self, user):
         """Гэр бүлийг засах эрхтэй эсэх.
 
@@ -913,8 +918,7 @@ class Family(models.Model):
         сольж болно. Хоосон гэр бүлд `all([])` нь True буцаана — хор хөнөөлгүй
         (өөрчлөх зүйл нь зөвхөн засах эрхтэй хүн рүү заах partner үүр).
         """
-        members = list(self.partners) + [link.child for link in self.children.all()]
-        return all(p.can_edit_by(user) for p in members)
+        return all(p.can_edit_by(user) for p in self.members)
 
     def clean(self):
         if self.partner1_id and self.partner1_id == self.partner2_id:

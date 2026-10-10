@@ -169,19 +169,21 @@ class PersonInviteTests(AccountTestMixin, TestCase):
         self.assertEqual(invite.person_id, self.person.pk)
         self.assertEqual(invite.role, User.Role.VIEWER)   # анхдагч нь «энгийн хүн»
 
-    def test_invite_can_grant_editor_role(self):
-        """«Editor» сонголтоор урихад тэр эрхээр бүртгэгдэнэ."""
+    def test_editor_invite_needs_admin_approval(self):
+        """Editor илгээсэн editor урилга нь ШУУД editor эрх олгохгүй."""
         self.client.force_login(self.editor)
         self.client.post(reverse("genealogy:person_account_invite",
                                  args=[self.person.pk]),
                          {"email": "ed-new@example.com", "role": "editor"})
         invite = Invite.objects.get(email="ed-new@example.com")
         self.assertEqual(invite.role, User.Role.EDITOR)
+        self.assertTrue(invite.needs_editor_approval)
+        self.assertEqual(invite.effective_role, User.Role.VIEWER)
 
         self.client.post(reverse("accounts:invite_accept", args=[invite.token]),
                          {"new_password1": "s3cret-pass", "new_password2": "s3cret-pass"})
         self.assertEqual(User.objects.get(email="ed-new@example.com").role,
-                         User.Role.EDITOR)
+                         User.Role.VIEWER)
 
     def test_invite_cannot_grant_admin(self):
         """Урилгаар админ эрх олгогдохгүй — эрх өргөжүүлэх зам хаалттай."""
@@ -489,3 +491,190 @@ class PersonEditEmailTests(TestCase):
             send_edit_request_email("apo@example.com", "Бат", "х@example.com", "—", "—")
             send_edit_resolved_email("apo@example.com", "Бат", True, "—")
         self.assertEqual(mail.outbox, [])
+
+
+class PersonAccountPanelTests(AccountTestMixin, TestCase):
+    """Хүний засах хуудасны «Бүртгэл (хэрэглэгч)» карт."""
+
+    def setUp(self):
+        super().setUp()
+        # `/admin/`-д орохын тулд `is_staff` ЗААВАЛ — роль хангалтгүй.
+        self.staff = User.objects.create_user(email="acc-staff@example.com", password="x",
+                                              role=User.Role.ADMIN, is_staff=True)
+        self.link(self.person, self.viewer)
+
+    def _panel(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse("genealogy:person_edit", args=[self.person.pk]))
+
+    def test_staff_sees_a_link_to_the_django_user_page(self):
+        response = self._panel(self.staff)
+        self.assertContains(response, "Бүртгэл засах")
+        self.assertContains(response,
+                            reverse("admin:accounts_user_change", args=[self.viewer.pk]))
+
+    def test_editor_without_staff_does_not_see_the_link(self):
+        """`/admin/`-д орох эрхгүй хүнд ажиллахгүй линк харуулахгүй."""
+        response = self._panel(self.editor)
+        self.assertNotContains(response, "Бүртгэл засах")
+
+    def test_linked_viewer_does_not_see_the_link(self):
+        response = self._panel(self.viewer)
+        self.assertNotContains(response, "Бүртгэл засах")
+
+    def test_no_link_when_nobody_is_linked(self):
+        Person.objects.filter(pk=self.person.pk).update(linked_user=None)
+        response = self._panel(self.staff)
+        self.assertNotContains(response, "Бүртгэл засах")
+
+
+class EditorInviteApprovalTests(AccountTestMixin, TestCase):
+    """Editor урилгын эрхийг админ батална.
+
+    Editor өөрөө editor үүсгэх нь эрх өргөжүүлэх зам болохгүйн тулд
+    хүлээн авагч эхэндээ viewer эрхээр нэгдэж, editor эрх нь админы
+    батламжаар нээгдэнэ (`Invite.needs_editor_approval`).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Хүн бүрд нэг л хүлээгдэж буй урилга байх тул тусдаа хүмүүс авна.
+        self.p1 = Person.objects.create(given_name="Нэг")
+        self.p2 = Person.objects.create(given_name="Хоёр")
+        self.p3 = Person.objects.create(given_name="Гурав")
+
+    def _invite(self, person, sender, role, email):
+        self.client.force_login(sender)
+        self.client.post(reverse("genealogy:person_account_invite", args=[person.pk]),
+                         {"email": email, "role": role})
+        return Invite.objects.get(email=email)
+
+    def _accept(self, invite):
+        self.client.post(reverse("accounts:invite_accept", args=[invite.token]),
+                         {"new_password1": "s3cret-pass", "new_password2": "s3cret-pass"})
+
+    def _decide(self, invite, action, user):
+        self.client.force_login(user)
+        return self.client.post(
+            reverse("accounts:invite_decide", args=[invite.pk, action]))
+
+    # --- хүлээгдэж буй төлөв ------------------------------------------------
+    def test_viewer_invite_needs_no_approval(self):
+        invite = self._invite(self.p1, self.editor, "viewer", "v@example.com")
+        self.assertFalse(invite.needs_editor_approval)
+        self.assertEqual(invite.effective_role, User.Role.VIEWER)
+
+    def test_admin_created_editor_invite_is_immediate(self):
+        """Админ өөрөө илгээвэл тэр бол эрх олгогч — батламж шаардахгүй."""
+        invite = self._invite(self.p1, self.admin, "editor", "a@example.com")
+        self.assertFalse(invite.needs_editor_approval)
+        self._accept(invite)
+        self.assertEqual(User.objects.get(email="a@example.com").role, User.Role.EDITOR)
+
+    # --- батлах / татгалзах -------------------------------------------------
+    def test_approving_after_acceptance_promotes_the_user(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e1@example.com")
+        self._accept(invite)
+        self.assertEqual(User.objects.get(email="e1@example.com").role, User.Role.VIEWER)
+
+        self._decide(invite, "approve", self.admin)
+
+        invite.refresh_from_db()
+        self.assertFalse(invite.needs_editor_approval)
+        self.assertEqual(invite.approved_by, self.admin)
+        self.assertEqual(User.objects.get(email="e1@example.com").role, User.Role.EDITOR)
+
+    def test_approving_before_acceptance_grants_editor_on_join(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e2@example.com")
+        self._decide(invite, "approve", self.admin)
+        self._accept(invite)
+        self.assertEqual(User.objects.get(email="e2@example.com").role, User.Role.EDITOR)
+
+    def test_rejecting_leaves_the_invite_as_viewer(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e3@example.com")
+        self._decide(invite, "reject", self.admin)
+
+        invite.refresh_from_db()
+        self.assertEqual(invite.role, User.Role.VIEWER)
+        self.assertFalse(invite.needs_editor_approval)
+        self._accept(invite)
+        self.assertEqual(User.objects.get(email="e3@example.com").role, User.Role.VIEWER)
+
+    def test_rejecting_after_acceptance_does_not_downgrade_further(self):
+        """Хүлээн авсан хүн viewer хэвээр — татгалзал нь эрх нэмэхгүй, хасахгүй."""
+        invite = self._invite(self.p1, self.editor, "editor", "e4@example.com")
+        self._accept(invite)
+        self._decide(invite, "reject", self.admin)
+        self.assertEqual(User.objects.get(email="e4@example.com").role, User.Role.VIEWER)
+
+    # --- эрх ба хамгаалалт --------------------------------------------------
+    def test_editor_cannot_decide(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e5@example.com")
+        self._decide(invite, "approve", self.editor)
+        invite.refresh_from_db()
+        self.assertTrue(invite.needs_editor_approval, "Editor өөрөө баталсан байна")
+
+    def test_viewer_cannot_decide(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e6@example.com")
+        self._decide(invite, "approve", self.viewer)
+        invite.refresh_from_db()
+        self.assertTrue(invite.needs_editor_approval)
+
+    def test_double_decide_is_a_no_op(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e7@example.com")
+        self._decide(invite, "approve", self.admin)
+        self._decide(invite, "reject", self.admin)
+
+        invite.refresh_from_db()
+        self.assertEqual(invite.role, User.Role.EDITOR)
+        self.assertEqual(invite.approved_by, self.admin)
+
+    def test_unknown_action_is_404(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e8@example.com")
+        self.assertEqual(self._decide(invite, "delete", self.admin).status_code, 404)
+
+    def test_approval_never_touches_is_staff_or_superuser(self):
+        """Эрх өргөх нь зөвхөн VIEWER → EDITOR — админ эрх рүү гарах зам хаалттай."""
+        invite = self._invite(self.p1, self.editor, "editor", "e9@example.com")
+        self._accept(invite)
+        self._decide(invite, "approve", self.admin)
+
+        user = User.objects.get(email="e9@example.com")
+        self.assertEqual(user.role, User.Role.EDITOR)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+
+    def test_approval_does_not_downgrade_an_admin(self):
+        """Урилга хүлээн авсан хүн аль хэдийн админ бол өргөх шаардлагагүй."""
+        invite = self._invite(self.p1, self.editor, "editor", "adm2@example.com")
+        self._accept(invite)
+        User.objects.filter(email="adm2@example.com").update(role=User.Role.ADMIN)
+
+        self._decide(invite, "approve", self.admin)
+
+        self.assertEqual(User.objects.get(email="adm2@example.com").role, User.Role.ADMIN)
+
+    # --- харагдац -----------------------------------------------------------
+    def test_invite_list_shows_pending_editor_invite_with_buttons(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e10@example.com")
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("accounts:invite_list"))
+
+        self.assertContains(response, "Editor эрх хүлээгдэж байна")
+        self.assertContains(
+            response, reverse("accounts:invite_decide", args=[invite.pk, "approve"]))
+        self.assertContains(response, "Одоогоор: энгийн хүн (viewer)")
+
+    def test_invite_list_hides_buttons_after_the_decision(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e11@example.com")
+        self._decide(invite, "approve", self.admin)
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("accounts:invite_list"))
+        self.assertNotContains(response, "Editor эрх хүлээгдэж байна")
+
+    def test_accept_page_warns_about_the_pending_editor_right(self):
+        invite = self._invite(self.p1, self.editor, "editor", "e12@example.com")
+        response = self.client.get(reverse("accounts:invite_accept", args=[invite.token]))
+        self.assertContains(response, "админы батламж")
+        self.assertContains(response, "энгийн хүний (viewer)")

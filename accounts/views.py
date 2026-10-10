@@ -56,6 +56,50 @@ def invite_list(request):
     return render(request, "accounts/invite_list.html", {"invites": invites})
 
 
+@login_required
+@require_POST
+def invite_decide(request, pk, action):
+    """Editor урилгын эрхийг батлах / татгалзах (зөвхөн админ).
+
+    Editor урилга нь батлагдах хүртэл зөвхөн viewer эрх өгдөг. Батлахад —
+    хүлээн авагч аль хэдийн бүртгүүлсэн бол тэр даруй editor болно, эс
+    бөгөөс урилга нь editor эрхээр хүчинтэй болно. Татгалзавал урилга нь
+    бүрмөсөн viewer эрхтэй үлдэнэ.
+
+    `EditorRequestTests`-ийн `editor_request_decide`-ийн адил: зөвхөн
+    VIEWER → EDITOR, `is_staff`/`is_superuser`-ыг ХЭЗЭЭ Ч хөндөхгүй.
+    """
+    if not _require_admin(request):
+        messages.error(request, "Зөвхөн админ эрх батална.")
+        return redirect("genealogy:home")
+    if action not in {"approve", "reject"}:
+        raise Http404
+
+    with transaction.atomic():
+        # `select_related("accepted_by")` БОЛОХГҮЙ: тэр FK нь nullable тул
+        # LEFT JOIN үүсч, PostgreSQL `FOR UPDATE`-г хориглодог.
+        invite = get_object_or_404(Invite.objects.select_for_update(), pk=pk)
+        if not invite.needs_editor_approval:
+            messages.error(request, "Энэ урилга аль хэдийн шийдэгдсэн.")
+            return redirect("accounts:invite_list")
+
+        invite.approved_at = timezone.now()
+        invite.approved_by = request.user
+        if action == "approve":
+            # Хүлээн авагч аль хэдийн бүртгүүлсэн бол эрхийг нь өргөнө.
+            invitee = invite.accepted_by
+            if invitee is not None and invitee.role == User.Role.VIEWER:
+                invitee.role = User.Role.EDITOR
+                invitee.save(update_fields=["role"])
+        else:
+            # Татгалзсан урилга цаашид editor эрх олгохгүй.
+            invite.role = User.Role.VIEWER
+        invite.save(update_fields=["role", "approved_at", "approved_by"])
+
+    messages.success(request, "Урилга шийдэгдлээ.")
+    return redirect("accounts:invite_list")
+
+
 def _linkable_person(invite):
     """Урилгад заасан хүн холбох боломжтой эсэх.
 
@@ -91,10 +135,13 @@ def invite_accept(request, token):
                               {"invite": invite, "email_taken": True}, status=410)
             try:
                 with transaction.atomic():
+                    # Эрх нь `effective_role`: батлагдаагүй editor урилга
+                    # зөвхөн viewer эрх өгнө (админ дараа нь батална).
+                    role = invite.effective_role
                     user = User.objects.create_user(
                         email=invite.email, password=form.cleaned_data["new_password1"],
-                        role=invite.role, full_name=form.cleaned_data.get("full_name", ""),
-                        is_staff=invite.role == User.Role.ADMIN,
+                        role=role, full_name=form.cleaned_data.get("full_name", ""),
+                        is_staff=role == User.Role.ADMIN,
                     )
                     # Хүнтэй урилга бол холбоосыг тавина. Урилга үүсгэснээс хойш
                     # хүн нас барсан/нэгтгэгдсэн бол `_linkable_person` дээр
@@ -110,6 +157,9 @@ def invite_accept(request, token):
                 return render(request, "accounts/invite_invalid.html",
                               {"invite": invite, "email_taken": True}, status=410)
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+            if invite.needs_editor_approval:
+                messages.info(request, "Та энгийн хүний (viewer) эрхээр нэгдлээ. "
+                                       "Editor эрх нь админы батламж хүлээж байна.")
             messages.success(request, "Тавтай морил! Нууц үг тавигдлаа.")
             return redirect("genealogy:home")
     else:

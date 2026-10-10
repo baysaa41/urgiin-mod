@@ -100,6 +100,15 @@ class Invite(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="invites_sent",
         verbose_name="Урьсан",
     )
+    # Editor эрх нь админы батламж шаардана. Editor урилга илгээвэл
+    # `approved_at` хоосон үлдэж, урилга нь ЗӨВХӨН viewer эрх олгоно
+    # (`effective_role`); админ батламагц (хүлээн авсан бол) хэрэглэгч
+    # editor болно. Админ өөрөө илгээвэл шууд батлагдсанд тооцогдоно.
+    approved_at = models.DateTimeField("Эрх батлагдсан", null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="invites_approved", verbose_name="Эрх баталсан",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField("Хугацаа дуусах")
     accepted_at = models.DateTimeField("Хүлээн авсан", null=True, blank=True)
@@ -120,6 +129,27 @@ class Invite(models.Model):
     @property
     def is_valid(self):
         return self.accepted_at is None and timezone.now() < self.expires_at
+
+    @property
+    def needs_editor_approval(self):
+        """Editor эрх нь админы батламж хүлээж байгаа эсэх."""
+        return self.role == User.Role.EDITOR and self.approved_at is None
+
+    @property
+    def effective_role(self):
+        """Урилга хүлээн авахад олгох БОДИТ эрх.
+
+        Батлагдаагүй editor урилга нь зөвхөн viewer эрх өгнө — эс бөгөөс
+        editor өөрөө editor үүсгэх зам нээгдэнэ.
+        """
+        if self.needs_editor_approval:
+            return User.Role.VIEWER
+        return self.role
+
+    @property
+    def role_label(self):
+        """Хүлээн авагчид олгох эрхийн шошго (батламжийг харгалзан)."""
+        return User.Role(self.effective_role).label
 
 
 class EditRequest(models.Model):

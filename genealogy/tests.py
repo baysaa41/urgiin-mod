@@ -1123,17 +1123,28 @@ class MissingParentSuggestionTests(TreeBuilderMixin, TestCase):
         self.assertNotIn(stranger.pk, self._pks(slot))
 
     def test_sex_only_match_is_not_suggested(self):
-        """Зөвхөн хүйс таарна гэдэг нь дохио биш — нэр эсвэл он жил хэрэгтэй."""
+        """Зөвхөн хүйс таарна гэдэг нь дохио биш — НЭР хэрэгтэй."""
         orphan = Person.objects.create(given_name="Өнчин", sex=Person.Sex.MALE)
         Person.objects.create(given_name="Эрэгтэй", sex=Person.Sex.MALE)
         slot = next(s for s in suggest_parents(orphan, self.editor) if s["role"] == "father")
         self.assertEqual(slot["candidates"], [])
 
-    def test_plausible_birth_year_alone_is_enough(self):
-        """Он жилийн зөрүү боломжит хэмжээнд байвал хүйс таарсан хүн санал болно."""
+    def test_plausible_birth_year_alone_is_not_enough(self):
+        """Хүйс таарч, нас нь боломжит завсарт багтсан ч НЭР таарахгүй бол
+        санал болохгүй — эс бөгөөс нэг үеийн бүх хүн жагсаалтыг дүүргэнэ."""
         orphan = Person.objects.create(given_name="Өнчин", sex=Person.Sex.MALE,
                                        birth_date=FlexDate.create_from_text("1950"))
-        candidate = Person.objects.create(given_name="Эрэгтэй", sex=Person.Sex.MALE,
+        Person.objects.create(given_name="Эрэгтэй", sex=Person.Sex.MALE,
+                              birth_date=FlexDate.create_from_text("1920"))
+        slot = next(s for s in suggest_parents(orphan, self.editor) if s["role"] == "father")
+        self.assertEqual(slot["candidates"], [])
+
+    def test_name_match_with_plausible_birth_year_is_suggested(self):
+        """Нэрийн дохио байвал насны зөрүү нь НЭМЭЛТ оноо болж, санал гарна."""
+        orphan = Person.objects.create(given_name="Өнчин", patronymic="Эцгийн",
+                                       sex=Person.Sex.MALE,
+                                       birth_date=FlexDate.create_from_text("1950"))
+        candidate = Person.objects.create(given_name="Эцгийн", sex=Person.Sex.MALE,
                                           birth_date=FlexDate.create_from_text("1920"))
         slot = next(s for s in suggest_parents(orphan, self.editor) if s["role"] == "father")
         self.assertIn(candidate.pk, self._pks(slot))
@@ -1195,10 +1206,13 @@ class MissingParentSuggestionTests(TreeBuilderMixin, TestCase):
         self.assertEqual(sibling_parent_candidates(orphan), [])
 
     def test_candidates_capped_at_limit(self):
+        """Хязгаар (`limit`) — нэрийн дохиотой кандидатууд дээр шалгана."""
         orphan = Person.objects.create(given_name="Өнчин", sex=Person.Sex.MALE,
+                                       clan_name="Санга",
                                        birth_date=FlexDate.create_from_text("1950"))
         for i in range(8):
             Person.objects.create(given_name=f"Эрэгтэй{i}", sex=Person.Sex.MALE,
+                                  clan_name="Санга",
                                   birth_date=FlexDate.create_from_text("1920"))
         slot = next(s for s in suggest_parents(orphan, self.editor, limit=3)
                     if s["role"] == "father")
@@ -2667,6 +2681,12 @@ class PersonDetailDisplayTests(TreeBuilderMixin, TestCase):
         response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
         self.assertNotContains(response, "Нас барсан:")
 
+    def test_sex_is_shown_with_its_label(self):
+        """Хүйс нь шошгогүйгээр наалдахгүй — «Хүйс: Эрэгтэй»."""
+        Person.objects.filter(pk=self.child.pk).update(sex=Person.Sex.MALE)
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertContains(response, "Хүйс: Эрэгтэй")
+
 
 class FlexDateReuseTests(TreeBuilderMixin, TestCase):
     """Форм бөглөх бүрт шинэ FlexDate мөр үүсэхээс сэргийлнэ."""
@@ -2830,6 +2850,9 @@ class LoginRequiredPolicyTests(TreeBuilderMixin, TestCase):
             # Editor хүсэлт
             reverse("accounts:editor_request"),
             reverse("accounts:editor_request_list"),
+            # Урилга ба editor урилгын батламж
+            reverse("accounts:invite_list"),
+            reverse("accounts:invite_decide", args=[1, "approve"]),
             # Хүний засварын хүсэлт
             reverse("genealogy:person_edit_request_list"),
             reverse("genealogy:person_edit_request_decide", args=[1, "approve"]),
@@ -3768,3 +3791,382 @@ class PersonEditRequestVisibilityTests(TreeBuilderMixin, TestCase):
         self.client.force_login(stranger)
         response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
         self.assertNotContains(response, "батлагдаагүй")
+
+
+class OpenClaimTests(TreeBuilderMixin, TestCase):
+    """«Бүх засварлагч засах боломжтой» бичлэг засварламагц эзэндээ шилжинэ."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="oc-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="oc-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.other = User.objects.create_user(email="oc-other@example.com", password="x",
+                                              role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="oc-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        # Админы нэр дээр үүссэн ч «нээлттэй» тул editor засах эрхтэй.
+        Person.objects.filter(pk=self.child.pk).update(is_open_for_edit=True,
+                                                       created_by=self.admin)
+        self.child.refresh_from_db()
+
+    def _edit(self, user, **overrides):
+        self.client.force_login(user)
+        return self.client.post(reverse("genealogy:person_edit", args=[self.child.pk]),
+                                edit_payload(self.child, **overrides))
+
+    # --- хүний мэдээлэл засах форм ----------------------------------------
+    def test_editor_edit_closes_and_claims_the_record(self):
+        self._edit(self.editor, given_name="Шинэ")
+
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.is_open_for_edit, "Нээлттэй хэвээр үлдсэн")
+        self.assertEqual(self.child.created_by, self.editor)
+
+    def test_claiming_editor_keeps_access(self):
+        self._edit(self.editor, given_name="Шинэ")
+        self.assertTrue(self.child.can_edit_by(self.editor))
+        self.assertTrue(self.child.can_edit_by(self.admin), "Админ хэзээ ч хязгаарлагдахгүй")
+
+    def test_other_editor_loses_access_after_the_claim(self):
+        self._edit(self.editor, given_name="Шинэ")
+
+        self.client.force_login(self.other)
+        response = self.client.get(reverse("genealogy:person_edit", args=[self.child.pk]))
+        self.assertEqual(response.status_code, 404)
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.can_edit_by(self.other))
+
+    def test_admin_edit_closes_without_taking_ownership(self):
+        """Админ засварлавал бичлэг ХААГДАХ ёстой, гэхдээ эзэмшихгүй —
+        өмнө нь editor эзэмшсэн бичлэгийг булааж авахгүй."""
+        Person.objects.filter(pk=self.child.pk).update(created_by=self.editor)
+        self._edit(self.admin, given_name="Админы")
+
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.is_open_for_edit, "Админ засварлавал хаагдах ёстой")
+        self.assertEqual(self.child.created_by, self.editor, "Админ эзэмшил булаав")
+        self.assertTrue(self.child.can_edit_by(self.editor), "Эзэн editor эрхээ алдав")
+        self.assertTrue(self.child.can_edit_by(self.admin))
+
+    def test_admin_edit_of_own_record_keeps_created_by(self):
+        """Админы нэр дээр байсан бичлэг админ засварлавал `created_by` хэвээр."""
+        self._edit(self.admin, given_name="Админы")
+
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.is_open_for_edit)
+        self.assertEqual(self.child.created_by, self.admin)
+
+    def test_viewer_self_edit_does_not_claim(self):
+        """Үзэгчийн засвар батлуулахаар хүлээгддэг тул эзэмшил үүсгэхгүй."""
+        Person.objects.filter(pk=self.child.pk).update(linked_user=self.viewer)
+        self._edit(self.viewer, given_name="Үзэгчийн")
+
+        self.child.refresh_from_db()
+        self.assertTrue(self.child.is_open_for_edit, "Үзэгч бичлэгийг эзэмшсэн")
+        self.assertEqual(self.child.created_by, self.admin)
+
+    def test_already_closed_record_is_left_alone(self):
+        Person.objects.filter(pk=self.child.pk).update(is_open_for_edit=False,
+                                                       created_by=self.admin)
+        # Хаалттай, эзэн нь админ тул editor засах эрхгүй — 404.
+        self.client.force_login(self.editor)
+        response = self.client.get(reverse("genealogy:person_edit", args=[self.child.pk]))
+        self.assertEqual(response.status_code, 404)
+
+    # --- бусад замууд ------------------------------------------------------
+    def test_quick_add_claims_the_anchor(self):
+        self.client.force_login(self.editor)
+        self.client.post(reverse("genealogy:quick_add", args=[self.child.pk, "child"]), {
+            "relation": "child", "given_name": "Шинэ хүүхэд", "patronymic": "",
+            "clan_name": "", "sex": "M", "birth_date": "",
+        })
+
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.is_open_for_edit)
+        self.assertEqual(self.child.created_by, self.editor)
+
+    def test_link_relative_claims_the_anchor(self):
+        outsider = Person.objects.create(given_name="Холбох хүн")
+        self.client.force_login(self.editor)
+        self.client.post(reverse("genealogy:link_relative", args=[self.child.pk, "child"]), {
+            "relation": "child", "person": outsider.pk, "pedigree": "birth",
+        })
+
+        self.child.refresh_from_db()
+        self.assertFalse(self.child.is_open_for_edit)
+        self.assertEqual(self.child.created_by, self.editor)
+
+    def test_family_edit_claims_every_member(self):
+        family = self.parent_family          # эцэг + эх + хүүхэд
+        Person.objects.filter(
+            pk__in=[self.father.pk, self.mother.pk, self.child.pk]
+        ).update(is_open_for_edit=True, created_by=self.admin)
+
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse("genealogy:family_edit", args=[family.pk]), {
+            "partner1": self.father.pk, "partner2": self.mother.pk,
+            "family_type": "marriage", "marriage_date": "", "divorce_date": "",
+            "marriage_place": "", "notes": "",
+        })
+        self.assertEqual(response.status_code, 302)
+
+        for person in (self.father, self.mother, self.child):
+            person.refresh_from_db()
+            self.assertFalse(person.is_open_for_edit, person.display_name)
+            self.assertEqual(person.created_by, self.editor, person.display_name)
+
+
+class PersonPageAgeOrderTests(TestCase):
+    """Профайл хуудсан дээр ах дүү ба хүүхдүүд өндөр настайгаас эрэмбэлэгдэнэ."""
+
+    @staticmethod
+    def _year(value):
+        """`FlexDate.parse`-аар — `date_from`/`date_to`/`sort_key` бөглөгдөнө.
+
+        `FlexDate.objects.create(raw=…)` нь `sort_key`-г `date.min` (ө.х.
+        «огноогүй») болгочихдог тул эрэмбэлэлтийг шалгаж чадахгүй.
+        """
+        flex = FlexDate.parse(str(value))
+        flex.save()
+        return flex
+
+    def setUp(self):
+        self.editor = User.objects.create_user(email="age-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="age-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        father = Person.objects.create(given_name="Эцэг", sex=Person.Sex.MALE)
+        mother = Person.objects.create(given_name="Эх", sex=Person.Sex.FEMALE)
+        self.parents = Family.objects.create(partner1=father, partner2=mother)
+
+        self.me = Person.objects.create(given_name="Төвхүн", sex=Person.Sex.MALE,
+                                        birth_date=self._year(1985))
+        # Нэрсийг зориуд ЦАГААН ТОЛГОЙН эсрэг дараалалтай өгсөн: «Я» нь
+        # хамгийн сүүлд, «Б» нь эхэнд эрэмбэлэгддэг. Ингэснээр тест нь
+        # нэрээр биш, ТӨРСӨН ОНООР эрэмбэлэгдсэнийг батална.
+        sib_mid = Person.objects.create(given_name="Батзориг", birth_date=self._year(1990))
+        sib_old = Person.objects.create(given_name="Ядамсүрэн", birth_date=self._year(1975))
+        sib_unknown = Person.objects.create(given_name="Ганхуяг")
+        for person in (self.me, sib_mid, sib_old, sib_unknown):
+            ChildLink.objects.create(family=self.parents, child=person)
+        self.sib_mid = sib_mid
+        self.sib_unknown = sib_unknown
+
+        partner = Person.objects.create(given_name="Хань", sex=Person.Sex.FEMALE)
+        own = Family.objects.create(partner1=self.me, partner2=partner)
+        kid_young = Person.objects.create(given_name="Батхүү", birth_date=self._year(2015))
+        kid_old = Person.objects.create(given_name="Ялалт", birth_date=self._year(2010))
+        ChildLink.objects.create(family=own, child=kid_young)
+        ChildLink.objects.create(family=own, child=kid_old)
+
+    def _order(self, names, user=None):
+        """`names`-ийг хуудсан дээр гарсан дарааллаар буцаана."""
+        self.client.force_login(user or self.editor)
+        body = self.client.get(
+            reverse("genealogy:person_detail", args=[self.me.pk])).content.decode()
+        for name in names:
+            self.assertIn(name, body, f"{name} хуудсан дээр алга")
+        return sorted(names, key=body.index)
+
+    def test_siblings_are_listed_oldest_first(self):
+        order = self._order(["Ядамсүрэн", "Батзориг", "Ганхуяг"])
+        self.assertEqual(order, ["Ядамсүрэн", "Батзориг", "Ганхуяг"],
+                         "Төрсөн оноор биш, нэрээр эрэмбэлэгдсэн байна")
+
+    def test_children_are_listed_oldest_first(self):
+        self.assertEqual(self._order(["Ялалт", "Батхүү"]), ["Ялалт", "Батхүү"],
+                         "Төрсөн оноор биш, нэрээр эрэмбэлэгдсэн байна")
+
+    def test_masked_person_does_not_leak_their_age_by_position(self):
+        """Нарийн мэдээлэл нь хаалттай хүний насыг эрэмбээр ч задруулахгүй —
+        түүнийг «огноогүй» гэж үзээд төгсгөлд нь тавина."""
+        # 1990 онтой ах/дүүг хаалттай болговол тэр нь эхэнд биш, төгсгөлд гарна.
+        Person.objects.filter(pk=self.sib_mid.pk).update(
+            visibility=Person.Visibility.PRIVATE)
+        order = self._order(["Ядамсүрэн", "Батзориг", "Ганхуяг"], user=self.viewer)
+        self.assertEqual(order[0], "Ядамсүрэн")
+        self.assertEqual(sorted(order[1:]), ["Батзориг", "Ганхуяг"])
+
+
+class SiblingTreeModeTests(TestCase):
+    """«Ах дүүс» горим: эцэг эхээс доош салбарласан мод."""
+
+    @staticmethod
+    def _year(value):
+        flex = FlexDate.parse(str(value))
+        flex.save()
+        return flex
+
+    def setUp(self):
+        self.editor = User.objects.create_user(email="sib-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.father = Person.objects.create(given_name="Эцэг", sex=Person.Sex.MALE)
+        self.mother = Person.objects.create(given_name="Эх", sex=Person.Sex.FEMALE)
+        self.parents = Family.objects.create(partner1=self.father, partner2=self.mother)
+
+        self.me = Person.objects.create(given_name="Би", sex=Person.Sex.MALE,
+                                        birth_date=self._year(1985))
+        self.older = Person.objects.create(given_name="Ахмад", sex=Person.Sex.MALE,
+                                           birth_date=self._year(1980))
+        self.younger = Person.objects.create(given_name="Бага", sex=Person.Sex.FEMALE,
+                                             birth_date=self._year(1990))
+        for person in (self.me, self.older, self.younger):
+            ChildLink.objects.create(family=self.parents, child=person)
+
+        # Хагас ах дүү — эцгийн өөр гэр бүлээс.
+        other_mother = Person.objects.create(given_name="Өөр эх", sex=Person.Sex.FEMALE)
+        other_family = Family.objects.create(partner1=self.father, partner2=other_mother)
+        self.half = Person.objects.create(given_name="Хагас", sex=Person.Sex.MALE,
+                                          birth_date=self._year(1995))
+        ChildLink.objects.create(family=other_family, child=self.half)
+
+        # Ахмад ахын хүүхэд.
+        self.older_family = Family.objects.create(partner1=self.older)
+        self.nephew = Person.objects.create(given_name="Ач хүү", sex=Person.Sex.MALE,
+                                            birth_date=self._year(2010))
+        ChildLink.objects.create(family=self.older_family, child=self.nephew)
+
+    def _graph(self, mode="siblings", max_depth=3):
+        return build_graph(self.me, mode=mode, max_depth=max_depth, user=self.editor)
+
+    def _by_name(self, graph, name):
+        return next(n for n in graph["nodes"] if n["name"] == name)
+
+    def test_parent_couple_is_a_single_node(self):
+        """Эцэг эх нь НЭГ зангилаа: row −1, нэр нь хоёулангийнх нь."""
+        graph = self._graph()
+        top = [n for n in graph["nodes"] if n["row"] == -1]
+        self.assertEqual(len(top), 1, "Эцэг эх тусдаа зангилаа болсон байна")
+        self.assertIn("Эцэг", top[0]["name"])
+        self.assertIn("Эх", top[0]["name"])
+        self.assertEqual(top[0]["relation"], "эцэг эх")
+
+    def test_couple_node_has_no_spouse_link(self):
+        """Хос нэг зангилаа тул хоорондоо холбоос зурагдахгүй."""
+        graph = self._graph()
+        self.assertEqual([l for l in graph["links"] if l["type"] == "spouse"], [])
+
+    def test_siblings_link_to_the_couple_node(self):
+        graph = self._graph()
+        couple_id = next(n["id"] for n in graph["nodes"] if n["row"] == -1)
+        parents_of = {}
+        for link in graph["links"]:
+            if link["type"] == "parent":
+                parents_of.setdefault(link["target"], set()).add(link["source"])
+        for name in ("Ахмад", "Би", "Бага", "Хагас"):
+            pid = self._by_name(graph, name)["id"]
+            self.assertIn(couple_id, parents_of.get(pid, set()), name)
+
+    def test_single_parent_is_shown_alone(self):
+        """Ганц эцэг/эх байвал «хос» биш — өөрийн нэрээрээ, өөрийн шошгоороо."""
+        mother = Person.objects.create(given_name="Ганц эх", sex=Person.Sex.FEMALE)
+        family = Family.objects.create(partner1=mother)
+        kid = Person.objects.create(given_name="Ганц хүүхэд")
+        ChildLink.objects.create(family=family, child=kid)
+
+        graph = build_graph(kid, mode="siblings", max_depth=2, user=self.editor)
+        top = [n for n in graph["nodes"] if n["row"] == -1]
+        self.assertEqual(len(top), 1)
+        self.assertEqual(top[0]["name"], "Ганц эх")
+        self.assertEqual(top[0]["relation"], "эх")
+
+    def test_siblings_share_the_root_row_and_are_labelled_by_age(self):
+        graph = self._graph()
+        self.assertEqual(self._by_name(graph, "Би")["relation"], None)
+        for name in ("Ахмад", "Бага", "Би"):
+            self.assertEqual(self._by_name(graph, name)["row"], 0, name)
+        self.assertEqual(self._by_name(graph, "Ахмад")["relation"], "ах")
+        self.assertEqual(self._by_name(graph, "Бага")["relation"], "дүү")
+        # Мөр доторх эрэмбэ — төрсөн оноор (ахмад нь түрүүлнэ).
+        self.assertLess(self._by_name(graph, "Ахмад")["order"],
+                        self._by_name(graph, "Би")["order"])
+        self.assertLess(self._by_name(graph, "Би")["order"],
+                        self._by_name(graph, "Бага")["order"])
+
+    def test_half_sibling_from_the_other_parent_is_included(self):
+        """Нэг эцэг ЭСВЭЛ эх нь нэгтэй бол ах дүү — профайлын жагсаалттай ижил."""
+        graph = self._graph()
+        half = self._by_name(graph, "Хагас")
+        self.assertEqual(half["row"], 0)
+        self.assertEqual(half["relation"], "дүү")
+
+    def test_siblings_children_are_one_row_below(self):
+        graph = self._graph()
+        nephew = self._by_name(graph, "Ач хүү")
+        self.assertEqual(nephew["row"], 1)
+        self.assertEqual(nephew["relation"], "хүү")
+
+    def test_depth_limit_is_respected(self):
+        shallow = self._graph(max_depth=1)
+        self.assertNotIn("Ач хүү", [n["name"] for n in shallow["nodes"]])
+
+    def test_person_without_parents_does_not_break(self):
+        orphan = Person.objects.create(given_name="Өнчин")
+        graph = build_graph(orphan, mode="siblings", max_depth=3, user=self.editor)
+        self.assertEqual([n["name"] for n in graph["nodes"]], ["Өнчин"])
+        self.assertEqual(graph["nodes"][0]["row"], 0)
+
+    def test_tree_page_offers_the_siblings_mode(self):
+        self.client.force_login(self.editor)
+        response = self.client.get(
+            reverse("genealogy:tree_person", args=[self.me.pk]) + "?mode=siblings")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-mode="siblings"')
+
+    def test_tree_data_returns_the_siblings_mode(self):
+        self.client.force_login(self.editor)
+        response = self.client.get(
+            reverse("genealogy:tree_data", args=[self.me.pk]) + "?mode=siblings")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["mode"], "siblings")
+
+    def test_tree_header_shows_only_the_name(self):
+        """Гарчигт гол хүний ОН ЖИЛ харагдахгүй — зөвхөн нэр ба «Засах» товч.
+        Он жил нь модны зангилаа дээр аль хэдийн бичигддэг."""
+        self.client.force_login(self.editor)
+        response = self.client.get(reverse("genealogy:tree_person", args=[self.me.pk]))
+        self.assertNotContains(response, "tree-root-life")
+
+    def test_tree_page_does_not_leak_template_comments(self):
+        """`{# … #}` нь ЗӨВХӨН нэг мөрт тайлбар — олон мөрт бичвэл Django
+        тайлбар гэж тооцохгүй, хуудсан дээр шууд хэвлэгдэнэ."""
+        self.client.force_login(self.editor)
+        response = self.client.get(reverse("genealogy:tree_person", args=[self.me.pk]))
+        self.assertNotIn("{#", response.content.decode())
+
+    # --- зангилааны шошго ---------------------------------------------------
+    def test_nodes_show_only_the_given_name(self):
+        """Зангилаа дээр зөвхөн өөрийн нэр — эцгийн нэр/овог бичигдэхгүй."""
+        named = Person.objects.create(patronymic="Эцгийн", given_name="Ганбат",
+                                      surname="Овог")
+        kid = Person.objects.create(given_name="Хүүхэд")
+        ChildLink.objects.create(family=Family.objects.create(partner1=named), child=kid)
+
+        graph = build_graph(kid, mode="siblings", max_depth=2, user=self.editor)
+        node = self._by_name(graph, "Эцгийн Ганбат")     # бүтэн нэр нь хэвээр
+        self.assertEqual([line["text"] for line in node["lines"]], ["Ганбат"])
+
+    def test_couple_node_has_two_name_lines_and_nothing_else(self):
+        couple = next(n for n in self._graph()["nodes"] if n["row"] == -1)
+        self.assertTrue(couple["couple"])
+        self.assertEqual([line["text"] for line in couple["lines"]], ["Эцэг", "Эх"])
+
+    def test_one_deceased_parent_colours_only_that_line(self):
+        """Нэг нь нас барсан бол зөвхөн тэр мөр саарал — бүхэл зангилаа биш."""
+        Person.objects.filter(pk=self.father.pk).update(living_override=False)
+
+        couple = next(n for n in self._graph()["nodes"] if n["row"] == -1)
+        self.assertFalse(couple["deceased"],
+                         "Нэг нь амьд байхад бүхэл зангилаа саарал болсон")
+        flags = {line["text"]: line["deceased"] for line in couple["lines"]}
+        self.assertEqual(flags, {"Эцэг": True, "Эх": False})
+
+    def test_both_deceased_parents_make_the_whole_node_secondary(self):
+        Person.objects.filter(pk__in=[self.father.pk, self.mother.pk]).update(
+            living_override=False)
+
+        couple = next(n for n in self._graph()["nodes"] if n["row"] == -1)
+        self.assertTrue(couple["deceased"])
+        self.assertTrue(all(line["deceased"] for line in couple["lines"]))

@@ -9,6 +9,8 @@ urlpatterns = [
     path("logout/", views.EmailLogoutView.as_view(), name="logout"),
     path("invite/", views.invite_list, name="invite_list"),
     path("invite/<uuid:token>/", views.invite_accept, name="invite_accept"),
+    # Editor урилгын эрхийг батлах / татгалзах (зөвхөн админ).
+    path("invite/<int:pk>/<str:action>/", views.invite_decide, name="invite_decide"),
     path("editor-request/", views.editor_request, name="editor_request"),
     path("editor-requests/", views.editor_request_list, name="editor_request_list"),
     path("editor-requests/<int:pk>/<str:action>/", views.editor_request_decide,
