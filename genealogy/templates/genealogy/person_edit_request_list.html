@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Хүний засварын хүсэлтүүд{% endblock %}
+
+{% block content %}
+<h3 class="mb-1">Хүний засварын хүсэлтүүд</h3>
+<p class="text-muted small">
+    Хүн өөрийн бичлэгээ зассан засварууд. Өөрчлөлт нь аль хэдийн бичигдсэн —
+    зөвшөөрвөл хэвээр, татгалзвал хуучин утгууд сэргээгдэнэ.
+</p>
+
+<table class="table table-sm align-middle">
+    <thead><tr><th>Хүн</th><th>Хүсэлт гаргасан</th><th>Өөрчлөлт</th><th>Үүссэн</th><th></th></tr></thead>
+    <tbody>
+        {% for req in pending %}
+            <tr>
+                <td><a href="{% url 'genealogy:person_detail' req.person.pk %}">{{ req.person.named_display }}</a></td>
+                <td class="small">{{ req.submitted_by.email }}</td>
+                <td class="small">
+                    {% for row in req.diff %}
+                        <div>
+                            {{ row.label }}:
+                            <span class="text-muted text-decoration-line-through">{{ row.old }}</span>
+                            → <strong>{{ row.new }}</strong>
+                        </div>
+                    {% endfor %}
+                </td>
+                <td>{{ req.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-end">
+                    <form method="post" class="d-inline"
+                          action="{% url 'genealogy:person_edit_request_decide' req.pk 'approve' %}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-success">Зөвшөөрөх</button>
+                    </form>
+                    <form method="post" class="d-inline"
+                          action="{% url 'genealogy:person_edit_request_decide' req.pk 'reject' %}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-outline-secondary">Татгалзах</button>
+                    </form>
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="5" class="text-muted">Хүлээгдэж буй хүсэлт байхгүй.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if decided %}
+    <h6 class="text-muted mt-4">Шийдэгдсэн</h6>
+    <table class="table table-sm">
+        <thead><tr><th>Хүн</th><th>Хүсэлт гаргасан</th><th>Төлөв</th><th>Шийдсэн</th><th>Хэн</th></tr></thead>
+        <tbody>
+            {% for req in decided %}
+                <tr>
+                    <td><a href="{% url 'genealogy:person_detail' req.person.pk %}">{{ req.person.named_display }}</a></td>
+                    <td class="small">{{ req.submitted_by.email }}</td>
+                    <td>
+                        {% if req.status == "approved" %}
+                            <span class="badge bg-success">{{ req.get_status_display }}</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ req.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ req.resolved_at|date:"Y-m-d" }}</td>
+                    <td class="small">{{ req.resolved_by.email|default:"—" }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endif %}
+{% endblock %}

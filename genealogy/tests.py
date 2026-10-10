@@ -14,10 +14,11 @@ from io import StringIO
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Invite
@@ -34,6 +35,7 @@ from .models import (
     Citation,
     FlexDate,
     Person,
+    PersonEditRequest,
     PersonName,
     Place,
     Source,
@@ -50,6 +52,7 @@ from .services import (
     ancestor_paths,
     ancestors,
     build_graph,
+    changed_field_names,
     create_relative,
     descendant_paths,
     descendants,
@@ -57,6 +60,10 @@ from .services import (
     direct_relation_label,
     link_existing,
     merge_persons,
+    person_approvers,
+    person_snapshot,
+    record_person_edit_request,
+    restore_person_snapshot,
     suggested_clan_name,
     missing_parent_slots,
     relationship_between,
@@ -2823,6 +2830,9 @@ class LoginRequiredPolicyTests(TreeBuilderMixin, TestCase):
             # Editor хүсэлт
             reverse("accounts:editor_request"),
             reverse("accounts:editor_request_list"),
+            # Хүний засварын хүсэлт
+            reverse("genealogy:person_edit_request_list"),
+            reverse("genealogy:person_edit_request_decide", args=[1, "approve"]),
         ]
 
     def test_every_data_page_redirects_anonymous_to_login(self):
@@ -3249,3 +3259,512 @@ class MediaFileCleanupTests(TestCase):
             m.delete()
         self.assertEqual(len(callbacks), 2)
         self.assertTrue(m.file.storage.exists(name))
+
+
+# ---------------------------------------------------------------------------
+# Өөрийн засварын батламж (PersonEditRequest)
+# ---------------------------------------------------------------------------
+
+
+def edit_payload(person, **overrides):
+    """`PersonForm`-ийн бүрэн POST өгөгдөл — одоогийн утгуудаас үүсгэнэ.
+
+    Зөвхөн `overrides`-ыг өөрчилнө — ингэснээр «юу ч солиогүй POST» тестийг
+    ч бичиж болно.
+    """
+    def flex(value):
+        return value.raw if value is not None else ""
+
+    data = {
+        "given_name": person.given_name,
+        "patronymic": person.patronymic,
+        "clan_name": person.clan_name,
+        "surname": person.surname,
+        "called_name": person.called_name,
+        "sex": person.sex or Person.Sex.UNKNOWN,
+        "visibility": person.visibility,
+        "living_override": "",
+        "bio": person.bio,
+        "birth_place": person.birth_place_id or "",
+        "death_place": person.death_place_id or "",
+        "birth_date": flex(person.birth_date),
+        "death_date": flex(person.death_date),
+    }
+    data.update(overrides)
+    return data
+
+
+class PersonEditSnapshotTests(TreeBuilderMixin, TestCase):
+    """Snapshot, харьцуулалт ба сэргээлт — сангийн түвшинд."""
+
+    def setUp(self):
+        self.build_family()
+        self.place = Place.objects.create(name="Улаанбаатар")
+        self.date = FlexDate.objects.create(
+            raw="1913", qualifier=FlexDate.Qualifier.EXACT,
+            precision=FlexDate.Precision.YEAR)
+        self.child.birth_place = self.place
+        self.child.birth_date = self.date
+        self.child.save()
+
+    def test_changed_field_names_ignores_identical_flexdate_row(self):
+        """Ижил агуулгатай ШИНЭ FlexDate мөр нь «өөрчлөлт» биш."""
+        old = person_snapshot(self.child)
+        clone = FlexDate.objects.create(
+            raw="1913", qualifier=FlexDate.Qualifier.EXACT,
+            precision=FlexDate.Precision.YEAR)
+        self.child.birth_date = clone
+        self.child.save()
+        self.assertEqual(changed_field_names(old, person_snapshot(self.child)), [])
+
+    def test_changed_field_names_sees_real_change(self):
+        old = person_snapshot(self.child)
+        self.child.given_name = "Өөр"
+        self.child.save()
+        self.assertEqual(changed_field_names(old, person_snapshot(self.child)),
+                         ["given_name"])
+
+    def test_restore_brings_back_plain_place_and_flexdate(self):
+        old = person_snapshot(self.child)
+        other_place = Place.objects.create(name="Дархан")
+        self.child.given_name = "Өөр"
+        self.child.birth_place = other_place
+        self.child.birth_date = None
+        self.child.save()
+
+        restore_person_snapshot(self.child, old, ["given_name", "birth_place", "birth_date"])
+
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Хүүхэд")
+        self.assertEqual(self.child.birth_place_id, self.place.pk)
+        self.assertEqual(self.child.birth_date_id, self.date.pk)
+
+    def test_restore_creates_flexdate_when_original_deleted(self):
+        old = person_snapshot(self.child)
+        self.child.birth_date = None
+        self.child.save()
+        FlexDate.objects.filter(pk=self.date.pk).delete()
+
+        restore_person_snapshot(self.child, old, ["birth_date"])
+
+        self.child.refresh_from_db()
+        self.assertIsNotNone(self.child.birth_date)
+        self.assertEqual(self.child.birth_date.raw, "1913")
+
+    def test_restore_reuses_identical_flexdate_row(self):
+        """Ижил утгатай мөр байвал шинээр ҮҮСГЭХГҮЙ — форм ч мөн адил."""
+        old = person_snapshot(self.child)
+        self.child.birth_date = None
+        self.child.save()
+        FlexDate.objects.filter(pk=self.date.pk).delete()
+        survivor = FlexDate.objects.create(
+            raw="1913", qualifier=FlexDate.Qualifier.EXACT,
+            precision=FlexDate.Precision.YEAR)
+
+        restore_person_snapshot(self.child, old, ["birth_date"])
+
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.birth_date_id, survivor.pk)
+
+    def test_restore_never_deletes_shared_flexdate(self):
+        """Сэргээлт нь FlexDate мөрийг өөрчлөхгүй, устгахгүй."""
+        old = person_snapshot(self.child)
+        before = FlexDate.objects.count()
+        self.child.birth_date = None
+        self.child.save()
+
+        restore_person_snapshot(self.child, old, ["birth_date"])
+
+        self.assertEqual(FlexDate.objects.count(), before)
+        self.assertTrue(FlexDate.objects.filter(pk=self.date.pk).exists())
+
+    def test_restore_drops_deleted_place(self):
+        """Устсан газар руу заахгүй — `IntegrityError` шидэхгүй."""
+        old = person_snapshot(self.child)
+        self.child.birth_place = None
+        self.child.save()
+        Place.objects.filter(pk=self.place.pk).delete()
+
+        restore_person_snapshot(self.child, old, ["birth_place"])
+
+        self.child.refresh_from_db()
+        self.assertIsNone(self.child.birth_place_id)
+
+    def test_restore_resyncs_called_personname(self):
+        """`called_name` ба CALLED `PersonName` хоёр хамт буцаана."""
+        self.child.called_name = "Хүү"
+        self.child.save()
+        PersonName.objects.create(person=self.child, name_type=PersonName.NameType.CALLED,
+                                  given_name="Хүү")
+        old = person_snapshot(self.child)
+
+        self.child.called_name = "Өөр"
+        self.child.save()
+        PersonName.objects.filter(person=self.child,
+                                  name_type=PersonName.NameType.CALLED).update(given_name="Өөр")
+
+        restore_person_snapshot(self.child, old, ["called_name"])
+
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.called_name, "Хүү")
+        called = PersonName.objects.get(person=self.child,
+                                        name_type=PersonName.NameType.CALLED)
+        self.assertEqual(called.given_name, "Хүү")
+
+    def test_restore_touches_only_given_fields(self):
+        old = person_snapshot(self.child)
+        self.child.given_name = "Өөр"
+        self.child.bio = "Намтар"
+        self.child.save()
+
+        restore_person_snapshot(self.child, old, ["given_name"])
+
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Хүүхэд")
+        self.assertEqual(self.child.bio, "Намтар", "Хүсэлтэд ороогүй талбар хөндөгдсөн")
+
+
+class PersonEditRequestModelTests(TreeBuilderMixin, TestCase):
+    """Загварын дүрэм: нэг хүнд нэг л хүлээгдэж буй хүсэлт."""
+
+    def setUp(self):
+        self.build_family()
+        self.viewer = User.objects.create_user(email="per-viewer@example.com", password="x")
+
+    def _request(self, **overrides):
+        data = {"person": self.child, "submitted_by": self.viewer}
+        data.update(overrides)
+        return PersonEditRequest.objects.create(**data)
+
+    def test_is_pending(self):
+        self.assertTrue(self._request().is_pending)
+
+    def test_second_pending_request_for_same_person_is_rejected(self):
+        self._request()
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self._request()
+
+    def test_decided_request_does_not_block_a_new_one(self):
+        first = self._request(status=PersonEditRequest.Status.APPROVED)
+        second = self._request()
+        self.assertNotEqual(first.pk, second.pk)
+
+    def test_repeat_submit_keeps_first_old_values(self):
+        """Давхар засвар нь ЭХНИЙ хуучин утгыг хадгална — татгалзвал тэнд буцна."""
+        old = person_snapshot(self.child)
+        self.child.given_name = "Нэг"
+        self.child.save()
+        req, created = record_person_edit_request(
+            self.child, self.viewer, old, person_snapshot(self.child), ["given_name"])
+        self.assertTrue(created)
+
+        self.child.bio = "Хоёр"
+        self.child.save()
+        req2, created2 = record_person_edit_request(
+            self.child, self.viewer, person_snapshot(self.child),
+            person_snapshot(self.child), ["bio"])
+
+        self.assertFalse(created2)
+        self.assertEqual(req.pk, req2.pk)
+        # `req` нь эхний объект — `changed_fields` нь зөвхөн `req2` дээр шинэчлэгдэнэ.
+        self.assertEqual(req2.old_values["given_name"], "Хүүхэд")
+        self.assertEqual(sorted(req2.changed_fields), ["bio", "given_name"])
+
+
+class PersonEditApprovalFlowTests(TreeBuilderMixin, TestCase):
+    """Үзэгчийн засвар батлуулахаар очно; editor-ийнх шууд бичигдэнэ."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="pe-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="pe-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="pe-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.child.linked_user = self.viewer
+        self.child.save()
+
+    def _post(self, **overrides):
+        return self.client.post(reverse("genealogy:person_edit", args=[self.child.pk]),
+                                edit_payload(self.child, **overrides))
+
+    def test_viewer_edit_creates_pending_request_and_writes_immediately(self):
+        self.client.force_login(self.viewer)
+        response = self._post(given_name="Шинэ нэр")
+
+        self.assertEqual(response.status_code, 302)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Шинэ нэр", "Засвар шууд бичигдэх ёстой")
+        req = PersonEditRequest.objects.get(person=self.child)
+        self.assertEqual(req.status, PersonEditRequest.Status.PENDING)
+        self.assertEqual(req.submitted_by, self.viewer)
+        self.assertEqual(req.changed_fields, ["given_name"])
+        self.assertEqual(req.old_values["given_name"], "Хүүхэд")
+
+    def test_viewer_sees_unapproved_badge(self):
+        self.client.force_login(self.viewer)
+        self._post(given_name="Шинэ нэр")
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertContains(response, "батлагдаагүй")
+
+    def test_viewer_edit_without_changes_creates_nothing(self):
+        self.client.force_login(self.viewer)
+        self._post()
+        self.assertEqual(PersonEditRequest.objects.count(), 0)
+
+    def test_editor_edit_creates_no_request(self):
+        self.client.force_login(self.editor)
+        response = self._post(given_name="Шууд")
+
+        self.assertEqual(response.status_code, 302)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Шууд")
+        self.assertEqual(PersonEditRequest.objects.count(), 0)
+
+    def test_admin_edit_creates_no_request(self):
+        self.client.force_login(self.admin)
+        self._post(given_name="Админ")
+        self.assertEqual(PersonEditRequest.objects.count(), 0)
+
+    def test_unrelated_user_is_denied(self):
+        """Холбоогүй, эрхгүй хүн форм руу орохгүй (глобал хориглолт → 302)."""
+        outsider = User.objects.create_user(email="pe-outsider@example.com", password="x")
+        self.client.force_login(outsider)
+        self.assertEqual(self._post(given_name="Хулгай").status_code, 302)
+        self.assertEqual(PersonEditRequest.objects.count(), 0)
+
+    def test_linked_viewer_cannot_edit_someone_else(self):
+        """Холбогдсон үзэгч ЗӨВХӨН өөрийн бичлэгээ засна — бусдынх руу 404."""
+        self.client.force_login(self.viewer)
+        response = self.client.post(
+            reverse("genealogy:person_edit", args=[self.father.pk]),
+            edit_payload(self.father, given_name="Хулгай"))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(PersonEditRequest.objects.count(), 0)
+
+    def test_editor_save_cancels_pending_request(self):
+        """Editor шууд засвал хуучирсан хүсэлт хаагдана (утга сэргээхгүй)."""
+        self.client.force_login(self.viewer)
+        self._post(given_name="Үзэгчийн")
+        self.client.force_login(self.editor)
+        self._post(given_name="Editor-ийн")
+
+        req = PersonEditRequest.objects.get(person=self.child)
+        self.assertEqual(req.status, PersonEditRequest.Status.REJECTED)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Editor-ийн")
+
+
+class PersonEditRequestDecideTests(TreeBuilderMixin, TestCase):
+    """Шийдвэрлэх эрх ба үр дагавар."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="pd-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="pd-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.foreign_editor = User.objects.create_user(
+            email="pd-foreign@example.com", password="x", role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="pd-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.child.linked_user = self.viewer
+        self.child.save()
+        # Хүсэлт: үзэгч нэрээ сольсон
+        self.client.force_login(self.viewer)
+        self.client.post(reverse("genealogy:person_edit", args=[self.child.pk]),
+                         edit_payload(self.child, given_name="Үзэгчийн"))
+        self.req = PersonEditRequest.objects.get(person=self.child)
+
+    def _decide(self, action, user=None):
+        if user is not None:
+            self.client.force_login(user)
+        return self.client.post(
+            reverse("genealogy:person_edit_request_decide", args=[self.req.pk, action]))
+
+    def test_admin_approves_and_values_stay(self):
+        response = self._decide("approve", self.admin)
+
+        self.assertEqual(response.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.APPROVED)
+        self.assertEqual(self.req.resolved_by, self.admin)
+        self.assertIsNotNone(self.req.resolved_at)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Үзэгчийн")
+
+    def test_admin_rejects_and_values_are_restored(self):
+        self._decide("reject", self.admin)
+
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.REJECTED)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Хүүхэд")
+
+    def test_editor_who_can_edit_the_person_may_decide(self):
+        """Fixture-ийн хүн эзэнгүй (`created_by=None`) тул editor засах эрхтэй."""
+        self._decide("approve", self.editor)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.APPROVED)
+
+    def test_submitter_cannot_approve_own_request(self):
+        """Өөрийгөө батлахгүй — editor хүсэлт гаргасан ч."""
+        # `self.child` дээр аль хэдийн хүлээгдэж буй хүсэлт бий (DB хязгаарлана)
+        # тул өөр хүн авна.
+        own = PersonEditRequest.objects.create(person=self.father, submitted_by=self.editor,
+                                               changed_fields=["given_name"])
+        self.client.force_login(self.editor)
+        response = self.client.post(reverse(
+            "genealogy:person_edit_request_decide", args=[own.pk, "approve"]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_editor_without_rights_on_the_person_gets_404(self):
+        Person.objects.filter(pk=self.child.pk).update(created_by=self.editor)
+        self._decide("approve", self.foreign_editor)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.PENDING)
+
+    def test_viewer_is_redirected(self):
+        response = self._decide("approve", self.viewer)
+        self.assertEqual(response.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.PENDING)
+
+    def test_double_decide_is_a_no_op(self):
+        self._decide("approve", self.admin)
+        self._decide("reject", self.admin)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.APPROVED)
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.given_name, "Үзэгчийн")
+
+    def test_unknown_action_is_404(self):
+        self.assertEqual(self._decide("delete", self.admin).status_code, 404)
+
+    def test_unlink_restores_and_closes_pending_request(self):
+        """Холбоос салгавал батлагдаагүй засвар хүчин төгөлдөр болохгүй."""
+        self.client.force_login(self.admin)
+        self.client.post(reverse("genealogy:person_account_unlink", args=[self.child.pk]))
+
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, PersonEditRequest.Status.REJECTED)
+        self.child.refresh_from_db()
+        self.assertIsNone(self.child.linked_user_id)
+        self.assertEqual(self.child.given_name, "Хүүхэд")
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class PersonEditRequestNotifyTests(TreeBuilderMixin, TestCase):
+    """Имэйл мэдэгдэл: хүсэлт ирэхэд батлагчдад, шийдвэр гарвал эзэнд."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="pn-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="pn-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="pn-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.child.linked_user = self.viewer
+        self.child.save()
+        mail.outbox.clear()
+
+    def _submit(self):
+        self.client.force_login(self.viewer)
+        return self.client.post(reverse("genealogy:person_edit", args=[self.child.pk]),
+                                edit_payload(self.child, given_name="Шинэ"))
+
+    def test_submit_emails_every_approver_except_submitter(self):
+        self._submit()
+
+        recipients = sorted(m.to[0] for m in mail.outbox)
+        self.assertEqual(recipients, ["pn-admin@example.com", "pn-editor@example.com"])
+        self.assertIn("батлах хүсэлт", mail.outbox[0].subject)
+        self.assertIn("Шинэ", mail.outbox[0].body)
+
+    def test_decide_emails_the_submitter(self):
+        self._submit()
+        mail.outbox.clear()
+        req = PersonEditRequest.objects.get(person=self.child)
+
+        self.client.force_login(self.admin)
+        self.client.post(reverse("genealogy:person_edit_request_decide",
+                                 args=[req.pk, "approve"]))
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["pn-viewer@example.com"])
+        self.assertIn("батлагдлаа", mail.outbox[0].subject)
+
+    def test_reject_email_says_values_were_restored(self):
+        self._submit()
+        mail.outbox.clear()
+        req = PersonEditRequest.objects.get(person=self.child)
+
+        self.client.force_login(self.admin)
+        self.client.post(reverse("genealogy:person_edit_request_decide",
+                                 args=[req.pk, "reject"]))
+
+        self.assertIn("татгалзлаа", mail.outbox[0].subject)
+        self.assertIn("сэргээгдлээ", mail.outbox[0].body)
+
+    def test_email_failure_does_not_break_the_save(self):
+        from unittest import mock
+        self.client.force_login(self.viewer)
+        with mock.patch("accounts.emails.send_mail", side_effect=Exception("SMTP унасан")):
+            response = self.client.post(
+                reverse("genealogy:person_edit", args=[self.child.pk]),
+                edit_payload(self.child, given_name="Шинэ"))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(PersonEditRequest.objects.filter(person=self.child).count(), 1)
+
+
+class PersonEditRequestVisibilityTests(TreeBuilderMixin, TestCase):
+    """Хүсэлтийн жагсаалт ба тэмдгийг ХЭН харах вэ."""
+
+    def setUp(self):
+        self.build_family()
+        self.admin = User.objects.create_user(email="pv-admin@example.com", password="x",
+                                              role=User.Role.ADMIN)
+        self.editor = User.objects.create_user(email="pv-editor@example.com", password="x",
+                                               role=User.Role.EDITOR)
+        self.foreign_editor = User.objects.create_user(
+            email="pv-foreign@example.com", password="x", role=User.Role.EDITOR)
+        self.viewer = User.objects.create_user(email="pv-viewer@example.com", password="x",
+                                               role=User.Role.VIEWER)
+        self.child.linked_user = self.viewer
+        self.child.save()
+        self.client.force_login(self.viewer)
+        self.client.post(reverse("genealogy:person_edit", args=[self.child.pk]),
+                         edit_payload(self.child, given_name="Үзэгчийн"))
+        self.client.logout()
+        self.child.refresh_from_db()
+
+    def test_viewer_cannot_open_the_list(self):
+        self.client.force_login(self.viewer)
+        response = self.client.get(reverse("genealogy:person_edit_request_list"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_editor_sees_requests_for_persons_they_may_edit(self):
+        self.client.force_login(self.editor)
+        response = self.client.get(reverse("genealogy:person_edit_request_list"))
+        self.assertContains(response, "Үзэгчийн")
+
+    def test_editor_without_rights_sees_nothing(self):
+        Person.objects.filter(pk=self.child.pk).update(created_by=self.editor)
+        self.client.force_login(self.foreign_editor)
+        response = self.client.get(reverse("genealogy:person_edit_request_list"))
+        self.assertNotContains(response, self.child.display_name)
+
+    def test_approver_sees_badge_and_diff_on_the_person_page(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertContains(response, "батлагдаагүй")
+        self.assertContains(response, "Үзэгчийн")
+
+    def test_unrelated_user_sees_no_badge(self):
+        stranger = User.objects.create_user(email="pv-stranger@example.com", password="x")
+        self.client.force_login(stranger)
+        response = self.client.get(reverse("genealogy:person_detail", args=[self.child.pk]))
+        self.assertNotContains(response, "батлагдаагүй")

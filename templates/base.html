@@ -32,6 +32,14 @@
                             <li><a class="dropdown-item" href="{% url 'genealogy:event_create' %}">Үйл явдал нэмэх</a></li>
                             <li><a class="dropdown-item" href="{% url 'genealogy:media_upload' %}">Файл оруулах</a></li>
                             <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{% url 'genealogy:person_edit_request_list' %}">
+                                    Хүний засварын хүсэлт
+                                    {% if pending_person_edits_count %}
+                                        <span class="badge bg-warning text-dark">{{ pending_person_edits_count }}</span>
+                                    {% endif %}
+                                </a>
+                            </li>
                             <li><a class="dropdown-item" href="{% url 'genealogy:duplicates' %}">Давхардсан хүмүүс</a></li>
                             <li><a class="dropdown-item" href="{% url 'genealogy:audit' %}">Аудит бүртгэл</a></li>
                             {% if user.is_admin %}

@@ -6,15 +6,18 @@
 
 from datetime import timedelta
 
+from unittest import mock
 from uuid import UUID
 
+from django.core import mail
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from genealogy.models import ChildLink, Family, FlexDate, Person
 
+from .emails import send_edit_request_email, send_edit_resolved_email
 from .models import EditRequest, Invite, User
 
 
@@ -446,3 +449,43 @@ class AdminViewModeTests(TestCase):
         self.client.post(self.mode_url, {"next": "/"})       # чекбокс тэмдэглээгүй
         self.assertFalse(self._node(self.father.pk)["masked"])
 
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class PersonEditEmailTests(TestCase):
+    """Батламжийн имэйл туслахууд — хэлбэр ба алдааны тэсвэр."""
+
+    def setUp(self):
+        mail.outbox.clear()
+
+    def test_request_email_carries_the_diff_and_link(self):
+        send_edit_request_email("apo@example.com", "Бат Болд", "hereglegch@example.com",
+                                "  Өөрийн нэр: Хуучин → Шинэ", "https://жишээ/холбоос")
+
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["apo@example.com"])
+        self.assertIn("батлах хүсэлт", message.subject)
+        self.assertIn("Бат Болд", message.body)
+        self.assertIn("hereglegch@example.com", message.body)
+        self.assertIn("Хуучин → Шинэ", message.body)
+        self.assertIn("https://жишээ/холбоос", message.body)
+
+    def test_approved_email(self):
+        send_edit_resolved_email("hereglegch@example.com", "Бат Болд", True, "https://жишээ")
+
+        self.assertIn("батлагдлаа", mail.outbox[0].subject)
+        self.assertIn("батлагдлаа", mail.outbox[0].body)
+
+    def test_rejected_email_mentions_restore(self):
+        send_edit_resolved_email("hereglegch@example.com", "Бат Болд", False, "https://жишээ")
+
+        self.assertIn("татгалзлаа", mail.outbox[0].subject)
+        self.assertIn("сэргээгдлээ", mail.outbox[0].body)
+
+    def test_send_failure_is_swallowed(self):
+        """SMTP унасан ч урсгал зогсохгүй (`send_invite_email`-ийн адил)."""
+        with mock.patch("accounts.emails.send_mail", side_effect=Exception("SMTP унасан")):
+            send_edit_request_email("apo@example.com", "Бат", "х@example.com", "—", "—")
+            send_edit_resolved_email("apo@example.com", "Бат", True, "—")
+        self.assertEqual(mail.outbox, [])

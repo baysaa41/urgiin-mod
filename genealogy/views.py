@@ -14,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.db.models import Case, CharField, Count, IntegerField, Q, Value, When
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -24,7 +25,12 @@ from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
-from accounts.emails import send_invite_email
+from accounts.emails import (
+    send_edit_request_email,
+    send_edit_resolved_email,
+    send_invite_email,
+)
+from accounts.middleware import real_user
 from accounts.models import Invite, User
 
 from . import services
@@ -46,6 +52,7 @@ from .models import (
     Media,
     MediaLink,
     Person,
+    PersonEditRequest,
     PersonName,
     Place,
     Source,
@@ -312,6 +319,7 @@ def person_detail(request, pk):
         ),
         "audit": AuditLog.objects.filter(object_id=person.pk).select_related("user")[:15]
         if getattr(request.user, "can_edit", False) else [],
+        **_pending_edit_context(request, person, can_edit_person),
     }
     return render(request, "genealogy/person_detail.html", context)
 
@@ -404,15 +412,66 @@ class PersonUpdateView(PersonEditMixin, UpdateView):
             "can_manage_account": can_manage,
             "can_link_existing": is_admin,
             "linkable_users": linkable_users,
+            "pending_edit": _pending_edit(person),
         })
         return context
 
     def form_valid(self, form):
+        """Засварыг хадгална. Эрхгүй (үзэгч) хүний засвар батлуулахаар очно.
+
+        Засвар нь `Person` мөрөнд ШУУД бичигдэнэ — гэхдээ «батлагдаагүй»
+        төлөвтэй; татгалзвал `old_values`-ээс сэргээнэ.
+        """
+        user = self.request.user
+        # Editor/admin өөрийн бичлэгээ шууд засна — батламж шаардахгүй.
+        privileged = bool(getattr(user, "can_edit", False))
+
+        # АНХААР: `form.is_valid()` дотор `construct_instance` нь `self.object`-ыг
+        # аль хэдийн шинэ утгаар дарсан байдаг тул хуучин утгыг ЗӨВХӨН сангаас
+        # шинэ query-ээр авна.
+        old_values = None
+        if not privileged:
+            old = Person.objects.select_related(
+                "birth_date", "death_date", "birth_place", "death_place",
+            ).get(pk=self.object.pk)
+            old_values = services.person_snapshot(old)
+
         response = super().form_valid(form)
-        services.log_action(self.request.user, AuditLog.Action.UPDATE, self.object,
+
+        # «Энгийн харагдац»-д `self.request.user` нь `User` биш бүрхүүл тул
+        # FK бичихдээ жинхэнэ хэрэглэгчийг авна.
+        actor = real_user(self.request)
+        # Хуучирсан хүсэлт editor-ийн шинэ утгатай зөрчилдөхгүйн тулд
+        # шууд засвар хийгдмэгц хүлээгдэж буй хүсэлтийг хаана.
+        if privileged:
+            _cancel_pending_edit(self.object, actor, "Шууд засвар хийгдсэн")
+
+        services.log_action(actor, AuditLog.Action.UPDATE, self.object,
                             {"fields": list(form.changed_data)},
                             ip_address=services.client_ip(self.request))
-        messages.success(self.request, "Өөрчлөлт хадгалагдлаа.")
+
+        if privileged:
+            messages.success(self.request, "Өөрчлөлт хадгалагдлаа.")
+            return response
+
+        new_values = services.person_snapshot(self.object)
+        changed = services.changed_field_names(old_values, new_values)
+        if not changed:
+            messages.info(self.request, "Өөрчлөлт оруулаагүй.")
+            return response
+
+        req, _ = services.record_person_edit_request(
+            self.object, actor, old_values, new_values, changed)
+
+        diff_text = services.render_diff_text(req)
+        link = f"{settings.SITE_URL}{reverse('genealogy:person_edit_request_list')}"
+        for approver in services.person_approvers(self.object, exclude_user=user):
+            send_edit_request_email(approver.email, self.object.named_display,
+                                    actor.email, diff_text, link)
+
+        messages.success(self.request,
+                         "Засвар хадгалагдлаа. Админ эсвэл editor батлах хүртэл "
+                         "«батлагдаагүй» төлөвтэй байна.")
         return response
 
     def get_success_url(self):
@@ -881,6 +940,56 @@ def _pending_invite(person):
     ).order_by("-created_at").first()
 
 
+def _pending_edit(person):
+    """Хүлээгдэж буй өөрийн засварын хүсэлт (нэг л байна — DB хязгаарлана)."""
+    return person.edit_requests.filter(
+        status=PersonEditRequest.Status.PENDING
+    ).select_related("submitted_by").first()
+
+
+def _pending_edit_context(request, person, can_edit_person):
+    """«Батлагдаагүй» тэмдэг ба диффийг ХЭНД харуулахыг шийднэ.
+
+    Зөвхөн батлах эрхтэй хүн (глобал `can_edit` ба `can_edit_by`) болон
+    хүсэлт гаргасан эзэнд — бусад нь шинэ утгыг тэмдэггүйгээр харна.
+    """
+    req = _pending_edit(person)
+    if req is None:
+        return {"pending_edit": None, "show_pending_badge": False, "pending_diff": []}
+    user = request.user
+    is_submitter = (getattr(user, "pk", None) is not None
+                    and req.submitted_by_id == user.pk)
+    can_approve = (bool(getattr(user, "can_edit", False))
+                   and can_edit_person and not is_submitter)
+    if not (is_submitter or can_approve):
+        return {"pending_edit": None, "show_pending_badge": False, "pending_diff": []}
+    return {
+        "pending_edit": req,
+        "show_pending_badge": True,
+        "is_submitter": is_submitter,
+        "pending_diff": services.describe_person_diff(req),
+    }
+
+
+def _cancel_pending_edit(person, user, note, restore=False):
+    """Хүлээгдэж буй хүсэлтийг татгалзсан болгоно. Байхгүй бол чимээгүй.
+
+    `restore=False` (анхдагч) үед утгуудыг сэргээхгүй — дуудагч (жишээ нь
+    editor-ийн шууд засвар) нь илүү шинэ утгыг аль хэдийн бичсэн байдаг.
+    """
+    req = _pending_edit(person)
+    if req is None:
+        return None
+    if restore:
+        services.restore_person_snapshot(person, req.old_values, req.changed_fields)
+    req.status = PersonEditRequest.Status.REJECTED
+    req.note = note
+    req.resolved_at = timezone.now()
+    req.resolved_by = user
+    req.save(update_fields=["status", "note", "resolved_at", "resolved_by"])
+    return req
+
+
 @login_required
 @require_POST
 def person_account_invite(request, pk):
@@ -972,6 +1081,10 @@ def person_account_unlink(request, pk):
     person = _manageable_person_or_404(request, pk)
     if person.linked_user_id is not None:
         email = person.linked_user.email
+        # Салгагдсан хүний батлагдаагүй засвар хүчин төгөлдөр болох ёсгүй —
+        # хуучин утгуудыг сэргээж, хүсэлтийг хаана (эс бөгөөс батламжийн
+        # хаалт тойрч, шалгагдаагүй мэдээлэл үлдэнэ).
+        _cancel_pending_edit(person, request.user, "Холбоос салгагдсан", restore=True)
         person.linked_user = None
         person.save(update_fields=["linked_user"])
         services.log_action(request.user, AuditLog.Action.UPDATE, person,
@@ -1087,3 +1200,90 @@ def audit_list(request):
                     | ~Q(content_type=person_ct))
             .order_by("-created_at")[:200])
     return render(request, "genealogy/audit.html", {"logs": logs})
+
+
+# ---------------------------------------------------------------------------
+# Өөрийн засварын батламж
+# ---------------------------------------------------------------------------
+
+
+def _approvable_edits(user):
+    """`user`-ийн БАТАЛЖ болох хүсэлтүүд.
+
+    Мөр тус бүрийн дүрмийг давхарлахгүй — `editable_by`-г нэг л удаа
+    дуудаж, түүнийгээ шүүлт болгоно (`Person.can_edit_by`-тай ижил дүрэм).
+    Өөрийнхөө хүсэлтийг хасна: хүсэлт гаргагч өөрийгөө батлахгүй, статусаа
+    хүний хуудсан дээрээ харна.
+    """
+    return (PersonEditRequest.objects
+            .select_related("person", "submitted_by", "resolved_by")
+            .filter(person__in=Person.objects.editable_by(user))
+            .exclude(submitted_by=user))
+
+
+@login_required
+def person_edit_request_list(request):
+    """Батлах хүсэлтүүд — зөвхөн тухайн хүнийг засах эрхтэй админ/editor."""
+    if not getattr(request.user, "can_edit", False):
+        messages.error(request, "Зөвхөн админ эсвэл editor хүсэлт харна.")
+        return redirect("genealogy:home")
+
+    base = _approvable_edits(request.user)
+    pending = list(base.filter(status=PersonEditRequest.Status.PENDING))
+    decided = list(base.exclude(status=PersonEditRequest.Status.PENDING)[:50])
+    # Диффийг view дээр бодож, мөр бүр дээрээ хавсаргана — template-д
+    # аргументтай метод дуудах эсвэл толь бичгээс pk-ээр хайх шаардлагагүй.
+    for req in pending:
+        req.diff = services.describe_person_diff(req)
+    return render(request, "genealogy/person_edit_request_list.html", {
+        "pending": pending,
+        "decided": decided,
+    })
+
+
+@login_required
+@require_POST
+def person_edit_request_decide(request, pk, action):
+    """Зөвшөөрөх / татгалзах.
+
+    Зөвхөн тухайн хүнийг засах эрхтэй админ/editor, мөн хүсэлт гаргаагүй
+    хүн. Зөвшөөрөхөд `Person` мөр аль хэдийн шинэ утгатай байгаа тул дахин
+    бичихгүй; татгалзахад `old_values`-ээс сэргээнэ.
+    """
+    if action not in {"approve", "reject"}:
+        raise Http404
+    user = request.user
+    if not getattr(user, "can_edit", False):
+        messages.error(request, "Зөвхөн админ эсвэл editor шийдвэрлэнэ.")
+        return redirect("genealogy:home")
+
+    with transaction.atomic():
+        req = get_object_or_404(
+            PersonEditRequest.objects.select_for_update()
+            .select_related("person", "submitted_by"), pk=pk)
+        # Объектын түвшний хориг → 404 (оршин байгааг задруулахгүй).
+        if not req.person.can_edit_by(user) or req.submitted_by_id == user.pk:
+            raise Http404
+        if not req.is_pending:
+            messages.error(request, "Энэ хүсэлт аль хэдийн шийдэгдсэн.")
+            return redirect("genealogy:person_edit_request_list")
+
+        if action == "reject":
+            person = Person.objects.select_for_update().get(pk=req.person_id)
+            services.restore_person_snapshot(person, req.old_values, req.changed_fields)
+            services.log_action(user, AuditLog.Action.UPDATE, person,
+                                {"reverted_fields": list(req.changed_fields)},
+                                ip_address=services.client_ip(request))
+            req.status = PersonEditRequest.Status.REJECTED
+        else:
+            req.status = PersonEditRequest.Status.APPROVED
+
+        req.resolved_at = timezone.now()
+        req.resolved_by = user
+        req.save(update_fields=["status", "resolved_at", "resolved_by"])
+
+    link = f"{settings.SITE_URL}{reverse('genealogy:person_detail', args=[req.person_id])}"
+    send_edit_resolved_email(req.submitted_by.email, req.person.named_display,
+                             action == "approve", link)
+    messages.success(request, "Хүсэлт шийдэгдлээ.")
+    return redirect("genealogy:person_edit_request_list")

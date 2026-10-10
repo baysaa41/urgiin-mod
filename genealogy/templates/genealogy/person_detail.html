@@ -2,10 +2,35 @@
 {% block title %}{{ person.named_display }} — Ургийн мод{% endblock %}
 
 {% block content %}
+{% if show_pending_badge %}
+    {# Хүлээгдэж буй засвар — зөвхөн батлогч ба хүсэлт гаргасан эзэнд харагдана. #}
+    <div class="alert alert-warning">
+        <div class="mb-1">
+            {% if is_submitter %}
+                Таны оруулсан засвар батлагдаагүй байна. Админ эсвэл editor
+                шийдвэрлэх хүртэл хүлээнэ үү.
+            {% else %}
+                Энэ хүний засвар батлагдаагүй байна —
+                {{ pending_edit.submitted_by.email }} засварласан.
+                <a href="{% url 'genealogy:person_edit_request_list' %}">Шийдвэрлэх</a>
+            {% endif %}
+        </div>
+        <ul class="mb-0 small">
+            {% for row in pending_diff %}
+                <li>
+                    {{ row.label }}:
+                    <span class="text-muted text-decoration-line-through">{{ row.old }}</span>
+                    → <strong>{{ row.new }}</strong>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
 <div class="d-flex justify-content-between align-items-start mb-3">
     <div>
         <h3 class="mb-1 {% if person.is_deceased and not person_masked %}text-secondary{% endif %}">
             {{ person.named_display }}
+            {% if show_pending_badge %}<span class="badge bg-warning text-dark">батлагдаагүй</span>{% endif %}
             {% if person.is_closed %}<span class="badge bg-dark">хаалттай</span>
             {% elif person.visibility == "private" %}<span class="badge bg-secondary">хувийн</span>{% endif %}
         </h3>

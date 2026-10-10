@@ -1268,3 +1268,70 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.get_action_display()} · {self.object_repr} · {self.created_at:%Y-%m-%d %H:%M}"
+
+
+# ---------------------------------------------------------------------------
+# Өөрийн засварын батламж
+# ---------------------------------------------------------------------------
+
+
+class PersonEditRequest(models.Model):
+    """Холбогдсон хэрэглэгч (үзэгч) өөрийн бичлэгээ зассан засварын хүсэлт.
+
+    Засвар нь `Person` мөрөнд ШУУД бичигдэнэ — гэхдээ «батлагдаагүй» төлөвтэй.
+    Тухайн хүнийг засах эрхтэй админ эсвэл editor (өөрөө хүсэлт гаргаагүй)
+    батална; татгалзвал `old_values`-ээс хуучин утгууд сэргээгдэнэ
+    (`services.restore_person_snapshot`).
+
+    `accounts.EditRequest`-ийн хэв маягийг дагана: нэг хүнд нэг л хүлээгдэж
+    буй хүсэлт байхыг DB-д хязгаарлана — давхар засвар нь нэг бичлэгт
+    нэгтгэгдэж, ЭХНИЙ хуучин утгууд хадгалагдана (татгалзвал эхний байдал
+    руу буцна).
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Хүлээгдэж байна"
+        APPROVED = "approved", "Зөвшөөрсөн"
+        REJECTED = "rejected", "Татгалзсан"
+
+    person = models.ForeignKey(
+        Person, on_delete=models.CASCADE, related_name="edit_requests", verbose_name="Хүн")
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="person_edit_requests", verbose_name="Хүсэлт гаргасан")
+    status = models.CharField("Төлөв", max_length=20, choices=Status.choices,
+                              default=Status.PENDING)
+    note = models.TextField("Тайлбар", blank=True)
+    # Бүрэн snapshot (зөвхөн өөрчлөгдсөн талбар биш) — дифф харуулах ба
+    # татгалзсан үед сэргээхэд хоёуланд нь хангалттай. Формат нь
+    # `services.person_snapshot`-д тодорхойлогдоно.
+    old_values = models.JSONField("Хуучин утга", default=dict, blank=True,
+                                  encoder=DjangoJSONEncoder)
+    new_values = models.JSONField("Шинэ утга", default=dict, blank=True,
+                                  encoder=DjangoJSONEncoder)
+    changed_fields = models.JSONField("Өөрчлөгдсөн талбарууд", default=list, blank=True)
+    created_at = models.DateTimeField("Үүссэн", auto_now_add=True)
+    resolved_at = models.DateTimeField("Шийдсэн", null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="person_edit_requests_resolved", verbose_name="Шийдсэн")
+
+    class Meta:
+        db_table = "genealogy_personeditrequest"
+        verbose_name = "Хүний засварын хүсэлт"
+        verbose_name_plural = "Хүний засварын хүсэлтүүд"
+        ordering = ["-created_at"]
+        constraints = [
+            # Нэг хүнд нэг л хүлээгдэж буй хүсэлт байна.
+            models.UniqueConstraint(
+                fields=["person"], condition=Q(status="pending"),
+                name="unique_pending_person_edit",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.person} — {self.get_status_display()}"
+
+    @property
+    def is_pending(self):
+        return self.status == self.Status.PENDING

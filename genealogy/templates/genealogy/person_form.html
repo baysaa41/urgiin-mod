@@ -1,6 +1,15 @@
 {% extends "genealogy/_form_base.html" %}
 {% block form_title %}{% if object %}Хүний мэдээлэл засах{% else %}Шинэ хүн бүртгэх{% endif %}{% endblock %}
 {% block submit_label %}{% if object %}Хадгалах{% else %}Бүртгэх{% endif %}{% endblock %}
+{# Хүлээгдэж буй засвар байвал анхааруулна — дараагийн засвар түүн дээр нэмэгдэнэ #}
+{% block form_extra %}
+    {% if pending_edit %}
+        <div class="alert alert-warning">
+            Энэ хүний өмнөх засвар хараахан батлагдаагүй байна. Одоо хийх
+            өөрчлөлт нь мөн адил батлуулахаар хүлээгдэнэ.
+        </div>
+    {% endif %}
+{% endblock %}
 {# Бүртгэлийн холбоос нь ЗӨВХӨН засах хуудсан дээр — шинэ хүн үүсгэхэд утгагүй #}
 {% block after_form %}
     {% if object %}{% include "genealogy/partials/_person_account_panel.html" %}{% endif %}

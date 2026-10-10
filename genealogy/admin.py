@@ -20,6 +20,7 @@ from .models import (
     Media,
     MediaLink,
     Person,
+    PersonEditRequest,
     PersonName,
     Place,
     Source,
@@ -198,6 +199,22 @@ class PersonNameAdmin(admin.ModelAdmin):
     list_display = ("__str__", "person", "name_type")
     search_fields = ("given_name", "patronymic", "surname")
     autocomplete_fields = ["person"]
+
+
+@admin.register(PersonEditRequest)
+class PersonEditRequestAdmin(admin.ModelAdmin):
+    """Зөвхөн уншина — шийдвэрийг апп дотроос (`/manage/person-edits/`) гаргана."""
+
+    list_display = ("created_at", "person", "submitted_by", "status", "changed_fields")
+    list_filter = ("status",)
+    search_fields = ("person__given_name", "person__patronymic", "submitted_by__email")
+    readonly_fields = [f.name for f in PersonEditRequest._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(AuditLog)

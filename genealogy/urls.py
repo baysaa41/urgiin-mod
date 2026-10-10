@@ -49,4 +49,10 @@ urlpatterns = [
     path("manage/duplicates/", views.duplicates, name="duplicates"),
     path("manage/merge/", views.merge_view, name="merge"),
     path("manage/audit/", views.audit_list, name="audit"),
+
+    # Өөрийн засварын батламж
+    path("manage/person-edits/", views.person_edit_request_list,
+         name="person_edit_request_list"),
+    path("manage/person-edits/<int:pk>/<str:action>/", views.person_edit_request_decide,
+         name="person_edit_request_decide"),
 ]

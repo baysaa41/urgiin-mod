@@ -6,16 +6,23 @@ Django ORM-д рекурсив CTE байхгүй тул эдгээрийг `con
 """
 
 from collections import defaultdict
+from datetime import date
 
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, transaction
+from django.db.models import Q
+from django.utils import timezone
 
 from .models import (
     AuditLog,
     ChildLink,
     Family,
+    FlexDate,
     Person,
+    PersonEditRequest,
     PersonName,
+    Place,
 )
 
 DEFAULT_MAX_GENERATIONS = 12
@@ -521,6 +528,17 @@ def merge_persons(keep, duplicate, user=None):
         filled.append("sex")
     keep.save()
 
+    # Нэгтгэгдэж буй бичлэгийн хүлээгдэж буй засвар нь `alive()`-аас гадуур
+    # үлдэх тул мөнхөд харагдахгүй болно — хүсэлтийг хааж тэмдэглэнэ.
+    for req in PersonEditRequest.objects.filter(
+            person=duplicate, status=PersonEditRequest.Status.PENDING):
+        req.status = PersonEditRequest.Status.REJECTED
+        req.note = "Нэгтгэгдсэн"
+        req.resolved_at = timezone.now()
+        req.resolved_by = (user if (user is not None
+                                    and getattr(user, "is_authenticated", False)) else None)
+        req.save(update_fields=["status", "note", "resolved_at", "resolved_by"])
+
     duplicate.merged_into = keep
     duplicate.save(update_fields=["merged_into"])
 
@@ -590,6 +608,226 @@ def client_ip(request):
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
+
+
+# ---------------------------------------------------------------------------
+# Өөрийн засварын snapshot (батламжийн урсгал)
+# ---------------------------------------------------------------------------
+
+# `PersonForm.Meta.fields`-тэй ЯГ ижил байх ёстой: формд байгаа ч энд
+# байхгүй талбар нь хүсэлтэд орохгүй, татгалзвал ч сэргээгдэхгүй.
+TRACKED_FIELDS = (
+    "clan_name", "patronymic", "surname", "given_name", "called_name", "sex",
+    "birth_date", "death_date", "birth_place", "death_place",
+    "living_override", "visibility", "bio",
+)
+FLEXDATE_FIELDS = ("birth_date", "death_date")
+PLACE_FIELDS = ("birth_place", "death_place")
+
+
+def _flexdate_snapshot(value):
+    """FlexDate мөрийг бүтнээр нь хадгална — мөр устсан ч сэргээх боломжтой."""
+    if value is None:
+        return None
+    return {
+        "pk": value.pk,
+        "raw": value.raw,
+        "qualifier": value.qualifier,
+        "precision": value.precision,
+        "date_from": value.date_from,
+        "date_to": value.date_to,
+        "gedcom_raw": value.gedcom_raw,
+        # Template ба имэйлээс метод дуудахгүйн тулд урьдчилан бодно.
+        "display": value.display,
+    }
+
+
+def person_snapshot(person):
+    """Хүний формд байдаг БҮХ талбарын бүрэн snapshot.
+
+    Зөвхөн өөрчлөгдсөнийг биш бүгдийг авна — дифф ба сэргээлт хоёулаа
+    нэг л эх сурвалжтай болно.
+    """
+    snapshot = {}
+    for name in TRACKED_FIELDS:
+        if name in FLEXDATE_FIELDS:
+            snapshot[name] = _flexdate_snapshot(getattr(person, name))
+        elif name in PLACE_FIELDS:
+            place = getattr(person, name)
+            snapshot[name] = None if place is None else {
+                "pk": place.pk, "display": place.full_name}
+        else:
+            snapshot[name] = getattr(person, name)
+    return snapshot
+
+
+def _field_value(entry, name):
+    """Харьцуулах хэвийн хэлбэр.
+
+    FlexDate-ыг pk-ээр БИШ агуулгаараа харьцуулна: ижил огноо нь форм
+    бүрд ШИНЭ мөрөнд хадгалагдаж болно (`FlexDateField.clean`).
+    """
+    if name in FLEXDATE_FIELDS:
+        if entry is None:
+            return None
+        return tuple(str(entry.get(key)) for key in
+                     ("raw", "qualifier", "precision", "date_from", "date_to"))
+    if name in PLACE_FIELDS:
+        return None if entry is None else entry.get("pk")
+    return entry
+
+
+def changed_field_names(old_values, new_values):
+    """Үнэхээр өөрчлөгдсөн талбарууд.
+
+    `form.changed_data`-ыг ашиглахгүй — FlexDate талбар бүр POST бүрд
+    «өөрчлөгдсөн» мэт харагддаг (initial нь объект, data нь текст).
+    """
+    return [name for name in TRACKED_FIELDS
+            if _field_value(old_values.get(name), name)
+            != _field_value(new_values.get(name), name)]
+
+
+def record_person_edit_request(person, submitted_by, old_values, new_values,
+                               changed_fields, note=""):
+    """Хүлээгдэж буй хүсэлт үүсгэнэ, байвал нэгтгэнэ. `(req, created)` буцаана.
+
+    Давхар засварт ЗӨВХӨН `new_values`/`changed_fields` шинэчлэгдэнэ —
+    `old_values` нь эхний засварын өмнөх байдал хэвээр үлдэх ёстой, эс
+    бөгөөс татгалзвал эхний байдал руу буцаж чадахгүй.
+    """
+    req, created = PersonEditRequest.objects.get_or_create(
+        person=person, status=PersonEditRequest.Status.PENDING,
+        defaults={
+            "submitted_by": submitted_by,
+            "old_values": old_values,
+            "new_values": new_values,
+            "changed_fields": list(changed_fields),
+            "note": note,
+        },
+    )
+    if not created:
+        req.new_values = new_values
+        req.changed_fields = sorted(set(req.changed_fields) | set(changed_fields))
+        if note:
+            req.note = note
+        req.save(update_fields=["new_values", "changed_fields", "note"])
+    return req, created
+
+
+def person_approvers(person, exclude_user=None):
+    """Тухайн хүнийг засах эрхтэй админ/editor-ууд.
+
+    Хоёр нөхцөл ЗААВАЛ: глобал `can_edit` (админ эсвэл editor) БА
+    `person.can_edit_by` — эс бөгөөс хүнтэй ямар ч холбоогүй editor
+    бусдын бичлэгийг батлах болно. Хүсэлт гаргагчийг хасна (өөрийгөө
+    батлахгүй). Шүүлт нь Python-д — `can_edit_by` нь мөр тус бүрийн дүрэм
+    бөгөөд хэрэглэгч цөөн.
+    """
+    User = get_user_model()
+    qs = (User.objects.filter(is_active=True)
+          .filter(Q(is_superuser=True) | Q(role__in=[User.Role.ADMIN, User.Role.EDITOR]))
+          .order_by("email"))
+    if exclude_user is not None:
+        qs = qs.exclude(pk=getattr(exclude_user, "pk", None))
+    return [user for user in qs if person.can_edit_by(user)]
+
+
+def _as_date(value):
+    if value is None or isinstance(value, date):
+        return value
+    return date.fromisoformat(value)
+
+
+def _resolve_flexdate(entry):
+    """Snapshot-оос FlexDate-ийн pk буцаана.
+
+    Мөр нь хэзээ ч ӨӨРЧЛӨГДӨХГҮЙ/УСТАГДАХГҮЙ — нэг FlexDate олон хүнд
+    хуваалцагдаж болно. Зөвхөн зааж өгнө, эсвэл (мөр устсан бол)
+    ижил утгатай мөрийг олоод, олдохгүй бол шинээр үүсгэнэ.
+    """
+    if entry is None:
+        return None
+    pk = entry.get("pk")
+    if pk is not None and FlexDate.objects.filter(pk=pk).exists():
+        return pk
+    fields = {
+        "raw": entry.get("raw") or "",
+        "qualifier": entry.get("qualifier") or FlexDate.Qualifier.EXACT,
+        "precision": entry.get("precision") or FlexDate.Precision.UNKNOWN,
+        "date_from": _as_date(entry.get("date_from")),
+        "date_to": _as_date(entry.get("date_to")),
+    }
+    # `FlexDateField.clean`-ийн адил ижил утгатай мөрийг ДАХИН ашиглана.
+    existing = FlexDate.objects.filter(**fields).first()
+    if existing is not None:
+        return existing.pk
+    return FlexDate.objects.create(gedcom_raw=entry.get("gedcom_raw") or "", **fields).pk
+
+
+def restore_person_snapshot(person, old_values, fields):
+    """`fields` талбаруудыг хуучин утга руу нь буцаана.
+
+    Зөвхөн хүсэлтэд орсон талбарыг хөндөнө — завсарт editor хийсэн бусад
+    засвар хэвээр үлдэнэ.
+    """
+    for name in fields or []:
+        entry = old_values.get(name)
+        if name in FLEXDATE_FIELDS:
+            setattr(person, name + "_id", _resolve_flexdate(entry))
+        elif name in PLACE_FIELDS:
+            pk = None if entry is None else entry.get("pk")
+            # Устсан газар руу заахгүй — `IntegrityError`-ээс сэргийлнэ.
+            if pk is not None and not Place.objects.filter(pk=pk).exists():
+                pk = None
+            setattr(person, name + "_id", pk)
+        else:
+            setattr(person, name, entry)
+    person.save()
+    # `called_name` ба CALLED `PersonName` нэг утгыг хадгалдаг тул буцаахдаа
+    # ч тааруулна. `forms` нь `services`-ийг импортолдоггүй ч модулийн
+    # түвшинд импортлохгүй — цикл үүсгэхээс сэргийлж локал.
+    from .forms import PersonForm
+    PersonForm._sync_called_personname(person)
+    return person
+
+
+def _field_label(name):
+    return str(Person._meta.get_field(name).verbose_name)
+
+
+def _display_value(name, entry):
+    """Диффт харуулах хэлбэр — хоосон утгыг «—» болгоно."""
+    if entry in (None, ""):
+        return "—"
+    if name in FLEXDATE_FIELDS:
+        return (entry or {}).get("display") or "—"
+    if name in PLACE_FIELDS:
+        return (entry or {}).get("display") or "—"
+    if name == "sex":
+        return dict(Person.Sex.choices).get(entry, entry)
+    if name == "visibility":
+        return dict(Person.Visibility.choices).get(entry, entry)
+    if name == "living_override":
+        return "Тийм" if entry else "Үгүй"
+    return str(entry)
+
+
+def describe_person_diff(req):
+    """`[{"label", "old", "new"}]` — template ба имэйлд нэг л хэлбэр."""
+    old_values, new_values = req.old_values or {}, req.new_values or {}
+    return [
+        {"label": _field_label(name),
+         "old": _display_value(name, old_values.get(name)),
+         "new": _display_value(name, new_values.get(name))}
+        for name in (req.changed_fields or [])
+    ]
+
+
+def render_diff_text(req):
+    """Имэйлд зориулсан энгийн текст дифф."""
+    return "\n".join(f"  {row['label']}: {row['old']} → {row['new']}"
+                     for row in describe_person_diff(req))
 
 
 # ---------------------------------------------------------------------------
