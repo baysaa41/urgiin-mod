@@ -78,7 +78,7 @@
 <p class="text-muted small mt-2 no-print">
     Зангилаа дарж тэр хүнийг модны төвд авчирна ·
     <span class="d-none d-lg-inline"><kbd>Ctrl</kbd>+дарж профайл нээнэ</span>
-    <span class="d-lg-none">зангилааг удаан дарж профайл нээнэ</span> ·
+    <span class="d-lg-none">зангилааг хоёр дарахад профайл нээнэ</span> ·
     хүрдээр томруулж, чирж зөөнө.
     <span style="border-bottom:1px dashed #adb5bd">Тасархай</span>
     шугам нь өргөмөл / асран хүмүүжүүлсэн / хойд холбоог заана — «Зөвхөн цусан
@@ -110,13 +110,12 @@ const zoom = d3.zoom().scaleExtent([0.02, 40]).on("zoom", (e) => g.attr("transfo
 svg.call(zoom);
 
 const NODE_W = 150, NODE_H = 58;
-const LONG_PRESS_MS = 600;   // утасн дээр профайл нээх «урт дарах» хугацаа
+// Утасн дээр `Ctrl` товч байхгүй — тиймээс ХОЁР ДАРАХ нь профайл нээнэ.
+// Нэг даралтыг `DOUBLE_TAP_MS` хүлээж байж recenter хийнэ: эс бөгөөс мод
+// хэлбэрээ сольж (recenter → load), хоёр дахь даралт өөр зангилаанд тусна.
+const DOUBLE_TAP_MS = 250;
+const TOUCH = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 let pressTimer = null;
-let longPressed = false;     // урт дарсны дараах click-ийг алгасах туг
-function cancelPress() {
-  clearTimeout(pressTimer);
-  pressTimer = null;
-}
 const PAD = 40;              // «бүтэн харах»-ын захын зай
 
 // `(cx, cy)` цэгийг viewport-ын төвд `scale` масштабаар авчирна.
@@ -220,33 +219,28 @@ function draw(data) {
       })
       .on("click", (e, d) => {
         if (d.hidden) return;
-        // Урт дарсны дараах «click»-ийг алгасна (доорх touch handler-ыг үзнэ үү).
-        if (longPressed) {
-          longPressed = false;
-          return;
-        }
         // Зангилаа дарж тэр хүнийг модны ТӨВД авчирна (хуудас дахин ачаалахгүй).
-        // Профайл руу явах бол Ctrl/Cmd+дарна.
+        // Профайл руу: компьютер дээр Ctrl/Cmd+дарж, утасн дээр хоёр дарж.
         if (e.metaKey || e.ctrlKey) {
           window.location = `/person/${d.id}/`;
           return;
         }
-        recenter(d);
-      });
-
-  // Утасн дээр `Ctrl` товч БАЙХГҮЙ — тиймээс зангилааг УРТ ДАРЖ (600ms)
-  // профайл нээнэ. Хуруу хөдөлбөл (чирэх, zoom) таймер цуцлагдана.
-  node
-      .on("touchstart", (e, d) => {
-        if (d.hidden) return;
-        cancelPress();
+        if (!TOUCH) {
+          recenter(d);
+          return;
+        }
+        if (pressTimer) {                    // хоёр дахь даралт → профайл
+          clearTimeout(pressTimer);
+          pressTimer = null;
+          window.location = `/person/${d.id}/`;
+          return;
+        }
+        const target = d;                    // нэг даралт → 250ms-ийн дараа төвд
         pressTimer = setTimeout(() => {
           pressTimer = null;
-          longPressed = true;
-          window.location = `/person/${d.id}/`;
-        }, LONG_PRESS_MS);
-      })
-      .on("touchmove touchend touchcancel", cancelPress);
+          recenter(target);
+        }, DOUBLE_TAP_MS);
+      });
 
   node.append("rect").attr("width", NODE_W).attr("height", NODE_H);
   // Нэр(үүд): мөр бүрээр НЭГ нэр — эцгийн нэр/овог нь зангилаанд багтахгүй.
