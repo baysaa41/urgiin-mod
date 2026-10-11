@@ -1161,15 +1161,17 @@ def person_account_invite(request, pk):
     # үүсгэх, ө.х. эрхээ өргөжүүлэх зам нээгдэнэ.
     auto_approved = role == User.Role.EDITOR and bool(
         getattr(request.user, "is_admin", False))
+    # Хүчинтэй хугацаа нь админы тохиргооноос (`SiteSettings`).
+    expiry_days = SiteSettings.load().invite_expiry_days
     invite = Invite.objects.create(
         email=email, role=role, person=person, invited_by=request.user,
-        expires_at=timezone.now() + timedelta(days=settings.INVITE_EXPIRY_DAYS),
+        expires_at=timezone.now() + timedelta(days=expiry_days),
         approved_at=timezone.now() if auto_approved else None,
         approved_by=request.user if auto_approved else None,
     )
     link = request.build_absolute_uri(
         reverse("accounts:invite_accept", args=[invite.token]))
-    send_invite_email(invite, link)
+    send_invite_email(invite, link, expiry_days)
     services.log_action(request.user, AuditLog.Action.UPDATE, person,
                         {"account_invite": email},
                         ip_address=services.client_ip(request))

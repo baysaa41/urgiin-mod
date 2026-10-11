@@ -76,7 +76,9 @@
 
 <svg id="tree" class="tree-svg"></svg>
 <p class="text-muted small mt-2 no-print">
-    Зангилаа дарж тэр хүнийг модны төвд авчирна · <kbd>Ctrl</kbd>+дарж профайл нээнэ ·
+    Зангилаа дарж тэр хүнийг модны төвд авчирна ·
+    <span class="d-none d-lg-inline"><kbd>Ctrl</kbd>+дарж профайл нээнэ</span>
+    <span class="d-lg-none">зангилааг удаан дарж профайл нээнэ</span> ·
     хүрдээр томруулж, чирж зөөнө.
     <span style="border-bottom:1px dashed #adb5bd">Тасархай</span>
     шугам нь өргөмөл / асран хүмүүжүүлсэн / хойд холбоог заана — «Зөвхөн цусан
@@ -108,6 +110,13 @@ const zoom = d3.zoom().scaleExtent([0.02, 40]).on("zoom", (e) => g.attr("transfo
 svg.call(zoom);
 
 const NODE_W = 150, NODE_H = 58;
+const LONG_PRESS_MS = 600;   // утасн дээр профайл нээх «урт дарах» хугацаа
+let pressTimer = null;
+let longPressed = false;     // урт дарсны дараах click-ийг алгасах туг
+function cancelPress() {
+  clearTimeout(pressTimer);
+  pressTimer = null;
+}
 const PAD = 40;              // «бүтэн харах»-ын захын зай
 
 // `(cx, cy)` цэгийг viewport-ын төвд `scale` масштабаар авчирна.
@@ -211,6 +220,11 @@ function draw(data) {
       })
       .on("click", (e, d) => {
         if (d.hidden) return;
+        // Урт дарсны дараах «click»-ийг алгасна (доорх touch handler-ыг үзнэ үү).
+        if (longPressed) {
+          longPressed = false;
+          return;
+        }
         // Зангилаа дарж тэр хүнийг модны ТӨВД авчирна (хуудас дахин ачаалахгүй).
         // Профайл руу явах бол Ctrl/Cmd+дарна.
         if (e.metaKey || e.ctrlKey) {
@@ -219,6 +233,20 @@ function draw(data) {
         }
         recenter(d);
       });
+
+  // Утасн дээр `Ctrl` товч БАЙХГҮЙ — тиймээс зангилааг УРТ ДАРЖ (600ms)
+  // профайл нээнэ. Хуруу хөдөлбөл (чирэх, zoom) таймер цуцлагдана.
+  node
+      .on("touchstart", (e, d) => {
+        if (d.hidden) return;
+        cancelPress();
+        pressTimer = setTimeout(() => {
+          pressTimer = null;
+          longPressed = true;
+          window.location = `/person/${d.id}/`;
+        }, LONG_PRESS_MS);
+      })
+      .on("touchmove touchend touchcancel", cancelPress);
 
   node.append("rect").attr("width", NODE_W).attr("height", NODE_H);
   // Нэр(үүд): мөр бүрээр НЭГ нэр — эцгийн нэр/овог нь зангилаанд багтахгүй.

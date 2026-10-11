@@ -4348,7 +4348,8 @@ class SiteSettingsViewTests(TreeBuilderMixin, TestCase):
                                                role=User.Role.VIEWER)
         self.url = reverse("genealogy:site_settings")
         self.data = {"default_tree_depth": 3, "max_tree_depth": 7,
-                     "viewer_tree_distance": 2, "living_years": 100}
+                     "viewer_tree_distance": 2, "living_years": 100,
+                     "invite_expiry_days": 30}
 
     def test_admin_can_open_the_page(self):
         self.client.force_login(self.admin)
@@ -4366,6 +4367,7 @@ class SiteSettingsViewTests(TreeBuilderMixin, TestCase):
         self.assertEqual(config.max_tree_depth, 7)
         self.assertEqual(config.viewer_tree_distance, 2)
         self.assertEqual(config.living_years, 100)
+        self.assertEqual(config.invite_expiry_days, 30)
 
     def test_saving_twice_keeps_a_single_row(self):
         self.client.force_login(self.admin)

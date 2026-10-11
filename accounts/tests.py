@@ -16,7 +16,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from genealogy.models import ChildLink, Family, FlexDate, Person
+from genealogy.models import ChildLink, Family, FlexDate, Person, SiteSettings
 
 from .emails import (
     send_edit_request_email,
@@ -211,6 +211,17 @@ class PersonInviteTests(AccountTestMixin, TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, self.person.display_name)
         self.assertNotContains(r, "Урилга үүсгэх")     # чөлөөт урилгын форм байхгүй
+
+    def test_invite_expiry_comes_from_the_site_settings(self):
+        """Хүчинтэй хугацаа нь админы тохиргооноос (`SiteSettings`)."""
+        SiteSettings.objects.create(invite_expiry_days=30)
+        self.client.force_login(self.editor)
+        self.client.post(reverse("genealogy:person_account_invite", args=[self.person.pk]),
+                         {"email": "expiry@example.com"})
+
+        invite = Invite.objects.get(email="expiry@example.com")
+        remaining = (invite.expires_at - timezone.now()).days
+        self.assertIn(remaining, (29, 30), f"30 хоног байх ёстой, {remaining} байна")
 
     def test_invite_blocked_for_deceased_person(self):
         self.client.force_login(self.editor)
@@ -701,8 +712,12 @@ class InviteEmailTests(AccountTestMixin, TestCase):
             expires_at=timezone.now() + timedelta(days=7), **data)
 
     def _send(self, invite):
-        send_invite_email(invite, "https://жишээ.мн/урилга")
+        send_invite_email(invite, "https://жишээ.мн/урилга", 30)
         return mail.outbox[0].body
+
+    def test_email_states_the_expiry_from_the_caller(self):
+        """Хүчинтэй хоног нь дуудагчийн дамжуулсан утгаар бичигдэнэ."""
+        self.assertIn("(30 хоногийн дотор)", self._send(self._invite()))
 
     def test_email_carries_the_accept_login_and_help_links(self):
         body = self._send(self._invite())
@@ -710,10 +725,12 @@ class InviteEmailTests(AccountTestMixin, TestCase):
         self.assertIn(reverse("accounts:login"), body)          # дараа нь нэвтрэх
         self.assertIn(reverse("genealogy:help"), body)          # заавар
 
-    def test_email_names_the_linked_person_and_the_login_name(self):
+    def test_email_states_the_login_name(self):
+        """Хэн болохыг (холбогдох хүнийг) бичихгүй — зөвхөн нэвтрэх нэр."""
         body = self._send(self._invite())
-        self.assertIn(self.person.named_display, body)
         self.assertIn("new@example.com", body)
+        self.assertNotIn(self.person.named_display, body)
+        self.assertNotIn("хүнтэй холбогдоно", body)
 
     def test_email_uses_the_site_url_as_the_base(self):
         body = self._send(self._invite())
@@ -721,7 +738,7 @@ class InviteEmailTests(AccountTestMixin, TestCase):
 
     def test_email_explains_what_the_invitee_can_do(self):
         body = self._send(self._invite())
-        self.assertIn("НУУЦ ҮГЭЭ ТАВИХ", body)
+        self.assertIn("НУУЦ ҮГ ТОХИРУУЛАХ", body)
         self.assertIn("ЗААВАР", body)
 
     def test_pending_editor_invite_warns_about_the_approval(self):
@@ -735,5 +752,5 @@ class InviteEmailTests(AccountTestMixin, TestCase):
 
     def test_send_failure_is_swallowed(self):
         with mock.patch("accounts.emails.send_mail", side_effect=Exception("SMTP")):
-            send_invite_email(self._invite(), "https://жишээ.мн/урилга")
+            send_invite_email(self._invite(), "https://жишээ.мн/урилга", 30)
         self.assertEqual(mail.outbox, [])

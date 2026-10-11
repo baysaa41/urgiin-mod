@@ -1371,6 +1371,9 @@ class SiteSettings(models.Model):
     living_years = models.PositiveSmallIntegerField(
         "Амьд хүний жил", default=110,
         help_text="Хэдэн жилээс өмнө төрснийг нас барсан гэж үзэх вэ.")
+    invite_expiry_days = models.PositiveSmallIntegerField(
+        "Урилгын хүчинтэй хоног", default=7,
+        help_text="Урилга илгээснээс хойш хэдэн хоног хүчинтэй байх вэ.")
     full_tree_within_distance = models.BooleanField(
         "Зай доторх хүний бүтэн мод", default=False,
         help_text=("Асаавал: үзэгч өөрөөсөө зай дотор багтсан хүний мод руу "
@@ -1399,6 +1402,8 @@ class SiteSettings(models.Model):
             raise ValidationError({"viewer_tree_distance": "0–20 хооронд байна."})
         if self.living_years < 1:
             raise ValidationError({"living_years": "Хамгийн багадаа 1 байна."})
+        if not 1 <= self.invite_expiry_days <= 365:
+            raise ValidationError({"invite_expiry_days": "1–365 хооронд байна."})
 
     @classmethod
     def load(cls):

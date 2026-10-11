@@ -16,8 +16,11 @@ from django.urls import reverse
 logger = logging.getLogger(__name__)
 
 
-def send_invite_email(invite, link):
+def send_invite_email(invite, link, expiry_days):
     """Урилгын линк, товч заавар ба холбоосуудыг илгээнэ.
+
+    `expiry_days` нь хүчинтэй хоног — дуудагч тал `SiteSettings`-ээс дамжуулна
+    (энэ модуль нь `genealogy`-г импортолохгүй: давхар хамаарал үүснэ).
 
     Имэйлд ГУРВАН холбоос байна: нууц үг тавих (`link`), дараа нь нэвтрэх
     хуудас, системийн заавар — ингэснээр хүлээн авагч хаанаас орохоо,
@@ -39,11 +42,10 @@ def send_invite_email(invite, link):
             message=(
                 "Сайн байна уу?\n\n"
                 "Танд «Ургийн мод» — гэр бүлийн түүхийн системд нэвтрэх урилга "
-                "ирлээ.\n"
-                f"Та {invite.person.named_display} хүнтэй холбогдоно.\n\n"
-                "1) НУУЦ ҮГЭЭ ТАВИХ\n"
-                f"   Доорх холбоосоор орж нууц үгээ тавина уу "
-                f"({settings.INVITE_EXPIRY_DAYS} хоногийн дотор):\n\n"
+                "ирлээ.\n\n"
+                "1) НУУЦ ҮГ ТОХИРУУЛАХ\n"
+                f"   Доорх холбоосоор орж нууц үгээ тохируулна уу "
+                f"({expiry_days} хоногийн дотор):\n\n"
                 f"{link}\n\n"
                 "2) ДАРАА НЬ НЭВТРЭХ\n"
                 f"   Хуудас: {base}{reverse('accounts:login')}\n"

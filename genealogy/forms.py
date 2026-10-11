@@ -388,7 +388,7 @@ class SiteSettingsForm(BootstrapFormMixin, forms.ModelForm):
         model = SiteSettings
         fields = ["default_tree_depth", "max_tree_depth",
                   "viewer_tree_distance", "full_tree_within_distance",
-                  "living_years"]
+                  "living_years", "invite_expiry_days"]
 
 
 class SourceForm(BootstrapFormMixin, forms.ModelForm):
